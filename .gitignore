@@ -1,0 +1,24 @@
+# Build directories
+build/
+install/
+log/
+
+# Bag files (usually large)
+bags/
+test_bags/
+
+# IDE
+.vscode/
+.idea/
+
+# Claude
+.claude/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# ROS generated
+*.bag
+refs/9dof_reference/

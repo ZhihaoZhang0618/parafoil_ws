@@ -1,0 +1,149 @@
+# Parafoil Simulator Parameters
+# All parameters can be overridden via ROS2 parameter server
+
+parafoil_simulator:
+  ros__parameters:
+    # ==========================================================
+    # Simulation Timing
+    # ==========================================================
+    ctl_dt: 0.02          # Control period [s] (50 Hz)
+    dt_max: 0.005         # Maximum integration substep [s]
+    integrator_type: "rk4"  # Options: euler, semi_implicit, rk4
+
+    # ==========================================================
+    # Initial Conditions (NED frame)
+    # ==========================================================
+    initial_position: [0.0, 0.0, -500.0]   # [N, E, D] in meters, -500m = 500m altitude
+    initial_velocity: [4.0, 0.0, 1.0]      # [vN, vE, vD] in m/s - tuned to match trim airspeed
+    initial_euler: [0.0, 0.0, 0.0]          # [roll, pitch, yaw] in radians
+
+    # ==========================================================
+    # Physical Constants (from reference model)
+    # ==========================================================
+    rho: 1.29             # Air density [kg/m^3] - matches reference
+    g: 9.81               # Gravitational acceleration [m/s^2]
+
+    # ==========================================================
+    # Mass Properties (reference model: 2.2kg parafoil)
+    # ==========================================================
+    m: 2.2                # Total mass [kg]
+    # Inertia for small parafoil - allows max turn rate ~360 deg/s at 100% brake
+    I_B_diag: [0.8, 0.15, 0.85]  # Inertia tensor diagonal [Ixx, Iyy, Izz] [kg*m^2]
+
+    # ==========================================================
+    # Geometry (reference model dimensions)
+    # ==========================================================
+    S: 1.5                # Canopy reference area [m^2]
+    b: 1.88               # Canopy span [m]
+    c: 0.80               # Canopy chord [m]
+    S_pd: 0.1             # Payload drag area [m^2]
+    c_D_pd: 1.0           # Payload drag coefficient
+    
+    # Position vectors in body frame (origin at system CG)
+    r_canopy_B: [0.0, 0.0, -0.3]  # Canopy aero center 0.3m above CG
+    r_pd_B: [0.0, 0.0, 0.2]       # Payload 0.2m below CG
+    pendulum_arm: 0.3             # Effective pendulum arm [m] - small parafoil
+
+    # ==========================================================
+    # Aerodynamic Coefficients - Lift
+    # TUNED to match flight log 09_01_06
+    # Target: V=4.3 m/s, sink=0.85 m/s, L/D=5.0 at zero brake
+    # ==========================================================
+    c_L0: 0.55            # Zero-alpha lift coefficient
+    c_La: 3.80            # Lift curve slope [1/rad]
+    c_Lds: 0.20           # Symmetric brake effect on lift
+
+    # ==========================================================
+    # Aerodynamic Coefficients - Drag
+    # TUNED to match flight log 09_01_06
+    # ==========================================================
+    c_D0: 0.16            # Parasite drag coefficient
+    c_Da2: 0.50           # Induced drag factor
+    c_Dds: 0.60           # Symmetric brake effect on drag
+
+    # ==========================================================
+    # Stall Model - heavy brake causes early stall
+    # ==========================================================
+    alpha_stall: 0.28           # Stall angle [rad] (~16 deg) at zero brake
+    alpha_stall_brake: 0.06     # Stall angle reduction per unit brake
+    alpha_stall_width: 0.08     # Wider transition for gradual stall onset
+    c_D_stall: 0.40             # Additional drag in stall
+
+    # ==========================================================
+    # Aerodynamic Coefficients - Side Force
+    # C_Y = c_Yb * beta
+    # NEGATIVE sign: sideslip produces restoring force
+    # CRITICAL for coordinated turning: must be large enough
+    # so flight direction tracks yaw direction
+    # ==========================================================
+    c_Yb: -6.8            # Side force due to sideslip [1/rad] - tuned for coordination
+
+    # ==========================================================
+    # Aerodynamic Coefficients - Roll Moment (from reference model)
+    # C_l = c_lp * p_hat + c_lda * delta_a
+    # ==========================================================
+    c_lp: -0.84           # Roll damping derivative
+    c_lda: -0.005         # Roll due to asymmetric brake
+
+    # ==========================================================
+    # Aerodynamic Coefficients - Pitch Moment (from reference model)
+    # C_m = c_m0 + c_ma * alpha + c_mq * q_hat
+    # alpha_trim = -c_m0/c_ma ≈ 8 degrees
+    # ==========================================================
+    c_m0: 0.1             # Zero-alpha pitching moment (nose-up tendency)
+    c_ma: -0.72           # Pitching moment slope [1/rad]
+    c_mq: -1.49           # Pitch damping derivative
+
+    # ==========================================================
+    # Aerodynamic Coefficients - Yaw Moment
+    # C_n = c_nr * r_hat + c_nda * delta_a + c_nb * beta + c_n_weath * wind_y
+    # c_nda negative: left brake -> turn left (realistic parafoil behavior)
+    # c_nb models wind-yaw coupling: crosswind produces yaw moment
+    # c_n_weath models weathercock: parafoil naturally turns from headwind to tailwind
+    # ==========================================================
+    c_nr: -0.27           # Yaw damping derivative
+    c_nda: -0.133         # Yaw due to asymmetric brake (negative: left brake -> turn left)
+    c_nb: 0.15            # Yaw due to sideslip (positive: right wind -> turn right)
+    c_n_weath: 0.02       # Weathercock effect (positive: turns away from headwind)
+
+    # ==========================================================
+    # Actuator Dynamics
+    # delta_dot = (delta_cmd - delta) / tau_act
+    # ==========================================================
+    tau_act: 0.2          # Actuator time constant [s]
+
+    # ==========================================================
+    # Numerical Parameters
+    # ==========================================================
+    eps: 1.0e-6           # Small value for division protection
+    V_min: 1.0            # Minimum velocity for aero calculations [m/s]
+
+    # ==========================================================
+    # Wind Model
+    # Set enable flags to true to activate wind disturbances
+    # ==========================================================
+    wind:
+      enable_steady: true        # Enable constant wind
+      enable_gust: false          # Enable discrete gusts
+      enable_colored: false       # Enable colored noise wind
+      
+      steady_wind: [0.0, 2.0, 0.0]  # Steady wind [N, E, D] [m/s]
+      
+      gust_interval: 10.0         # Mean time between gusts [s]
+      gust_duration: 2.0          # Gust duration [s]
+      gust_magnitude: 3.0         # Max gust speed [m/s]
+      
+      colored_tau: 2.0            # Filter time constant [s]
+      colored_sigma: 1.0          # Noise standard deviation [m/s]
+      
+      seed: -1                    # Random seed (-1 for random)
+
+    # ==========================================================
+    # Sensor Noise
+    # Set noise_std to non-zero to enable sensor noise
+    # ==========================================================
+    sensor:
+      position_noise_std: [0.0, 0.0, 0.0]   # Position noise [m]
+      accel_noise_std: [0.0, 0.0, 0.0]      # Accelerometer noise [m/s^2]
+      gyro_noise_std: [0.0, 0.0, 0.0]       # Gyroscope noise [rad/s]
+      seed: -1                               # Random seed (-1 for random)
