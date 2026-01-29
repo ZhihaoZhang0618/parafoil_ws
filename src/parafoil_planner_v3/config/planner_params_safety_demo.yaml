@@ -1,0 +1,93 @@
+parafoil_planner_v3:
+  ros__parameters:
+    planner_rate_hz: 1.0
+    use_library: true
+    library_path: ""
+
+    library:
+      enable_gpm_fine_tuning: false
+      coarse_path: "/tmp/parafoil_library_coarse.pkl"
+      fine_path: "/tmp/parafoil_library_fine.pkl"
+      coarse_k_neighbors: 5
+      fine_k_neighbors: 5
+      require_coarse_match: true
+      fallback_to_coarse: true
+      # Safety gates (tighten to ensure library is used only when closely matched)
+      max_altitude_error_m: 20.0
+      max_distance_error_m: 30.0
+      max_bearing_error_deg: 30.0
+      max_wind_speed_error_mps: 1.0
+      max_rel_wind_error_deg: 30.0
+      min_scale_xy: 0.7
+      max_scale_xy: 1.3
+      min_scale_z: 0.7
+      max_scale_z: 1.3
+
+    gpm:
+      num_nodes: 20
+      scheme: "LGL"
+      tf_guess: 30.0
+      max_constraint_violation_for_accept: 0.5
+
+    solver:
+      max_solve_time_s: 0.5
+
+    constraints:
+      terrain_type: "flat"
+      terrain_height0_m: 0.0
+      terrain_clearance_m: 0.0
+      # JSON-encoded list of circles: [[center_n, center_e, radius_m, clearance_m], ...]
+      no_fly_circles: "[[60.0, 0.0, 25.0, 10.0], [-40.0, 80.0, 20.0, 5.0]]"
+      # JSON-encoded list of polygons
+      no_fly_polygons: "[[[-30.0,-60.0],[-30.0,-20.0],[10.0,-20.0],[10.0,-60.0]]]"
+
+    wind:
+      use_topic: true
+      default_ned: [0.0, 4.0, 0.0]
+
+    target:
+      position_ned: [150.0, 0.0, 0.0]
+      auto_mode: "reach_center"
+      update_policy:
+        enabled: true
+        enable_hysteresis: true
+        score_hysteresis: 0.5
+        dist_hysteresis_m: 20.0
+        cruise_allow_update: true
+        approach_allow_update: "emergency_only"
+        flare_lock: true
+        emergency_margin_mps: -0.5
+        emergency_cooldown_s: 2.0
+        approach_significant_factor: 2.0
+        smooth_transition: false
+        smooth_rate_mps: 5.0
+
+    safety:
+      enable: true
+      selector:
+        grid_resolution_m: 20.0
+        search_radius_m: 0.0
+        max_candidates: 800
+        random_seed: 0
+        w_risk: 5.0
+        w_distance: 1.0
+        w_reach_margin: 1.0
+        w_energy: 0.5
+        nofly_buffer_m: 20.0
+        nofly_weight: 5.0
+        snap_to_terrain: true
+      reachability:
+        brake: 0.2
+        min_time_s: 2.0
+        max_time_s: 200.0
+        wind_margin_mps: 0.2
+        wind_uncertainty_mps: 0.5
+        gust_margin_mps: 0.5
+        min_altitude_m: 5.0
+        enforce_circle: true
+      risk:
+        grid_file: "/home/aims/parafoil_ws/src/parafoil_planner_v3/config/demo_risk_grid.npz"
+        grid_weight: 1.0
+        clip_min: 0.0
+        clip_max: 1.0
+        oob_value: 1.0
