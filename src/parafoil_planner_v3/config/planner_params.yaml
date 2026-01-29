@@ -1,0 +1,92 @@
+parafoil_planner_v3:
+  ros__parameters:
+    # Planner core
+    use_library: false
+    library_path: ""
+    planner_rate_hz: 1.0
+
+    # Library selection (online)
+    library:
+      k_neighbors: 5
+      enable_gpm_fine_tuning: true
+      fine_tuning_trigger_m: 10.0
+      terminal_pos_tol_m: 20.0
+      cost_w_terminal_pos: 1.0
+      cost_w_heading: 0.2
+      cost_w_control: 0.05
+      cost_w_time: 0.02
+      cost_w_path_length: 0.0
+
+    # GPM settings
+    gpm:
+      num_nodes: 20
+      scheme: "LGL"
+      tf_guess: 30.0
+      max_constraint_violation_for_accept: 0.5
+
+    # Fallback direct path (used when no library/GPM)
+    fallback:
+      dt: 1.0
+      brake: 0.2
+      wind_correction_gain: 1.0
+      min_ground_speed: 0.5
+
+    # Noise model (planner state estimation)
+    noise:
+      position_sigma: [0.5, 0.5, 0.3]          # m
+      velocity_sigma: [0.1, 0.1, 0.05]         # m/s
+      attitude_sigma: [0.01, 0.01, 0.02]       # rad (roll,pitch,yaw)
+      angular_rate_sigma: [0.005, 0.005, 0.01] # rad/s
+      seed: 0
+
+    # Default target (used if /target not received)
+    target:
+      position_ned: [0.0, 0.0, 0.0]
+      auto_mode: "manual"
+      update_policy:
+        enabled: true
+        enable_hysteresis: true
+        score_hysteresis: 0.5
+        dist_hysteresis_m: 20.0
+        cruise_allow_update: true
+        approach_allow_update: "emergency_only"
+        flare_lock: true
+        emergency_margin_mps: -0.5
+        emergency_cooldown_s: 2.0
+        approach_significant_factor: 2.0
+        smooth_transition: false
+        smooth_rate_mps: 5.0
+
+    # Safety-first landing site selection (disabled by default)
+    safety:
+      enable: false
+      selector:
+        grid_resolution_m: 25.0
+        search_radius_m: 0.0
+        max_candidates: 800
+        random_seed: 0
+        w_risk: 5.0
+        w_distance: 1.0
+        w_reach_margin: 1.0
+        w_energy: 0.5
+        nofly_buffer_m: 20.0
+        nofly_weight: 5.0
+        snap_to_terrain: true
+      reachability:
+        brake: 0.2
+        min_time_s: 2.0
+        max_time_s: 200.0
+        wind_margin_mps: 0.2
+        wind_uncertainty_mps: 0.0
+        gust_margin_mps: 0.0
+        min_altitude_m: 5.0
+        enforce_circle: true
+      risk:
+        grid_file: ""
+        grid_weight: 1.0
+        clip_min: 0.0
+        clip_max: 1.0
+        oob_value: 1.0
+        layer_files: []
+        layer_weights: []
+        layer_names: []

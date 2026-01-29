@@ -1,0 +1,67 @@
+optimization:
+  objectives:
+    primary: "landing_error.p95"
+    direction: "minimize"
+    constraints:
+      - name: "touchdown_vertical_velocity_mps.p95"
+        max: 2.0
+      - name: "success_rate"
+        min: 0.8
+
+  base_params:
+    L1_distance: 20.0
+    flare:
+      mode: "spec_full_brake"
+      touchdown_brake_altitude_m: 0.2
+      flare_ramp_time: 0.5
+      flare_full_brake_duration_s: 3.0
+      flare_initial_brake: 0.2
+      flare_max_brake: 1.0
+    lateral:
+      K_heading: 1.0
+      max_delta_a: 0.6
+      turn_rate_per_delta: 1.7
+      yaw_rate_max: 1.57
+      max_brake: 1.0
+
+  param_bounds:
+    L1_distance: [8.0, 35.0]
+    flare.flare_full_brake_duration_s: [2.0, 5.0]
+    flare.touchdown_brake_altitude_m: [0.05, 1.0]
+    flare.flare_ramp_time: [0.05, 1.0]
+    flare.flare_initial_brake: [0.1, 0.4]
+    flare.flare_max_brake: [0.6, 1.0]
+    lateral.K_heading: [0.5, 2.0]
+    lateral.max_delta_a: [0.2, 0.8]
+    lateral.turn_rate_per_delta: [1.0, 3.0]
+    lateral.yaw_rate_max: [0.8, 2.5]
+    lateral.max_brake: [0.6, 1.0]
+
+  settings:
+    max_iterations: 10
+    runs_per_iteration: 20
+    parallel: 4
+    seed: 42
+    exploration_rate: 0.3
+    step_scale: 0.15
+    record_history: false
+    convergence_tol: 1.0e-3
+    convergence_patience: 3
+    ros2_log_dir: ""
+
+  scenario:
+    altitude_m: [50.0, 200.0]
+    distance_m: [50.0, 250.0]
+    bearing_deg: [-180.0, 180.0]
+    wind_speed_mps: [0.0, 6.0]
+    wind_direction_deg: [0.0, 360.0]
+
+  simulation:
+    planner_rate_hz: 1.0
+    control_rate_hz: 20.0
+    max_time_s: 200.0
+    use_gpm: false
+    dynamics_mode: "simplified"
+
+  ai:
+    prompt_dir: "prompts"

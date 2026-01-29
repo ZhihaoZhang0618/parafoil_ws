@@ -1,0 +1,11 @@
+parafoil_guidance_v3:
+  ros__parameters:
+    approach:
+      wind_correction_gain: 0.8
+      wind_max_drift_m: 80.0
+    wind:
+      filter:
+        tau_s: 3.0
+        max_delta_mps: 1.0
+        gust_threshold_mps: 2.0
+        gust_hold_s: 1.5

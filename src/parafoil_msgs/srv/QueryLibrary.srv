@@ -1,0 +1,15 @@
+# Query trajectory library using the same 5D feature vector as the matcher:
+# [altitude_m, distance_m, bearing_rad, wind_speed_mps, relative_wind_angle_rad]
+float64 altitude_m
+float64 distance_m
+float64 bearing_rad
+float64 wind_speed_mps
+float64 wind_angle_rad
+int32 k
+---
+bool success
+string message
+int32[] indices
+float64[] distances
+string[] trajectory_types
+

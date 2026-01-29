@@ -1,0 +1,10 @@
+parafoil_planner_v3:
+  ros__parameters:
+    # If set, load Params from YAML (same schema as parafoil_simulator_ros/config/params.yaml)
+    # Leave empty to use Params() defaults.
+    dynamics_params_yaml: ""
+
+    integrator:
+      method: "rk4"   # euler | semi_implicit | rk4
+      dt_max: 0.01
+

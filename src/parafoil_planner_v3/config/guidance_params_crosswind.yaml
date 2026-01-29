@@ -1,0 +1,13 @@
+parafoil_guidance_v3:
+  ros__parameters:
+    L1_distance: 22.0
+    cruise:
+      final_leg_length: 180.0
+    approach:
+      wind_correction_gain: 1.2
+      wind_max_drift_m: 120.0
+      strong_wind_ratio: 1.2
+    wind:
+      filter:
+        tau_s: 1.5
+        max_delta_mps: 3.0

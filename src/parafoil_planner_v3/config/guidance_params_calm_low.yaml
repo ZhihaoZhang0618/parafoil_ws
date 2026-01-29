@@ -1,0 +1,14 @@
+parafoil_guidance_v3:
+  ros__parameters:
+    L1_distance: 15.0
+    phase:
+      approach_entry_distance: 120.0
+      flare_altitude: 8.0
+      flare_distance: 20.0
+    cruise:
+      final_leg_length: 120.0
+      hold_threshold_alt_excess: 15.0
+      racetrack_threshold_alt_excess: 35.0
+    approach:
+      wind_correction_gain: 0.8
+      wind_max_drift_m: 40.0

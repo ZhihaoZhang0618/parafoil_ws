@@ -1,0 +1,67 @@
+parafoil_guidance_v3:
+  ros__parameters:
+    control_rate_hz: 20.0
+    L1_distance: 20.0
+    brake_max: 0.6
+    abort_brake: 0.3
+
+    wind:
+      use_topic: true
+      topic: "/wind_estimate"
+      default_ned: [0.0, 2.0, 0.0]
+      filter:
+        enable: true
+        tau_s: 2.0
+        max_delta_mps: 2.0
+        gust_threshold_mps: 3.0
+        gust_hold_s: 1.0
+
+    target:
+      position_ned: [0.0, 0.0, 0.0]
+
+    phase:
+      approach_entry_distance: 180.0
+      altitude_margin: 1.1
+      glide_ratio_nominal: 3.0
+      approach_altitude_extra: 5.0
+      flare_altitude: 10.0
+      flare_distance: 30.0
+      abort_min_altitude_m: 2.0
+      abort_min_altitude_distance_m: 60.0
+      abort_max_glide_ratio: 10.0
+      abort_max_time_s: 300.0
+      abort_max_phase_time_s: 180.0
+
+    cruise:
+      strategy: "auto"  # auto|circle|s_turn|racetrack|direct
+      final_leg_length: 180.0
+      hold_threshold_alt_excess: 25.0
+      racetrack_threshold_alt_excess: 60.0
+      hold_radius: 40.0
+      hold_direction: 1
+      racetrack_length: 120.0
+      racetrack_radius: 40.0
+      s_turn_amplitude: 45.0
+      s_turn_period_s: 30.0
+      brake_cruise: 0.2
+      strong_wind_ratio: 1.05
+      strong_wind_entry_mode: "downwind"  # downwind|target
+      strong_wind_force_direct: true
+
+    approach:
+      brake_min: 0.0
+      brake_max: 0.6
+      wind_correction_gain: 1.0
+      wind_max_drift_m: 80.0
+      min_ground_speed: 0.5
+      strong_wind_ratio: 1.05
+      strong_wind_strategy: "wind_line_projection"  # wind_line_projection|downwind_bias|target
+      strong_wind_downwind_bias_m: 40.0
+
+    flare:
+      mode: "spec_full_brake"  # spec_full_brake|touchdown_brake
+      initial_brake: 0.2
+      max_brake: 1.0
+      ramp_time: 0.5
+      full_brake_duration_s: 3.0
+      touchdown_brake_altitude_m: 0.2

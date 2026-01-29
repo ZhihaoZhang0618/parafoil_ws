@@ -1,0 +1,19 @@
+scenarios:
+  - target_enu_x: 150.0
+    target_enu_y: 50.0
+    target_enu_z: 0.0
+    wind_steady_n: 0.0
+    wind_steady_e: 2.0
+    wind_steady_d: 0.0
+  - target_enu_x: 200.0
+    target_enu_y: -30.0
+    target_enu_z: 0.0
+    wind_steady_n: 1.0
+    wind_steady_e: 3.0
+    wind_steady_d: 0.0
+  - target_enu_x: 120.0
+    target_enu_y: 80.0
+    target_enu_z: 0.0
+    wind_steady_n: -1.0
+    wind_steady_e: 1.5
+    wind_steady_d: 0.0

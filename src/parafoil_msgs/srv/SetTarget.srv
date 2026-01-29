@@ -1,0 +1,8 @@
+# Set a new target position in NED coordinates.
+float64 north_m
+float64 east_m
+float64 down_m
+---
+bool success
+string message
+

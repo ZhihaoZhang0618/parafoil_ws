@@ -1,0 +1,22 @@
+parafoil_guidance_v3:
+  ros__parameters:
+    L1_distance: 28.0
+    wind:
+      use_topic: false
+      default_ned: [0.0, 6.0, 0.0]
+    cruise:
+      strong_wind_ratio: 0.95
+      strong_wind_entry_mode: "adaptive"
+      strong_wind_force_direct: true
+    phase:
+      approach_entry_distance: 220.0
+      altitude_margin: 1.6
+      approach_altitude_extra: 10.0
+    approach:
+      wind_correction_gain: 0.6
+      strong_wind_ratio: 0.95
+      strong_wind_strategy: "ground_speed"
+      strong_wind_downwind_bias_m: 40.0
+      ground_speed_lookahead_m: 50.0
+      ground_speed_min_time_s: 8.0
+      ground_speed_max_time_s: 120.0
