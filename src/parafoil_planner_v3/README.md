@@ -117,7 +117,7 @@ python3 $(ros2 pkg prefix parafoil_planner_v3)/share/parafoil_planner_v3/scripts
   --config $(ros2 pkg prefix parafoil_planner_v3)/share/parafoil_planner_v3/config/library_params.yaml \
   --output /tmp/parafoil_library_coarse.pkl
 
-# fine library (dense grid, simplified dynamics)
+# fine library (high-risk focus, non-uniform grid, mixed 6DOF sampling)
 python3 $(ros2 pkg prefix parafoil_planner_v3)/share/parafoil_planner_v3/scripts/generate_library.py \
   --config $(ros2 pkg prefix parafoil_planner_v3)/share/parafoil_planner_v3/config/library_params_full.yaml \
   --output /tmp/parafoil_library_fine.pkl
@@ -137,14 +137,29 @@ python3 $(ros2 pkg prefix parafoil_planner_v3)/share/parafoil_planner_v3/scripts
   --output /tmp/parafoil_library_fine.pkl
 ```
 
+估算生成耗时（抽样测速 + 外推）：
+
+```bash
+python3 $(ros2 pkg prefix parafoil_planner_v3)/share/parafoil_planner_v3/scripts/generate_library.py \
+  --config $(ros2 pkg prefix parafoil_planner_v3)/share/parafoil_planner_v3/config/library_params_full.yaml \
+  --output /tmp/parafoil_library_fine.pkl \
+  --estimate --sample-fraction 0.01
+```
+
 ## 配置文件一览
 
+完整索引见：`config/README.md`
+
 - `config/planner_params.yaml`：Planner 主参数（含安全落点选择 & 目标更新策略）。
-- `config/gpm_params.yaml`：GPM 求解器权重与约束。
-- `config/guidance_params.yaml`：CRUISE/APPROACH/FLARE 参数。
-- `config/dynamics_params.yaml`：动力学/气动参数。
-- `config/library_params.yaml`：轨迹库生成网格。
 - `config/planner_params_safety_demo.yaml`：安全 Demo 默认配置。
+- `config/planner_params_strongwind.yaml`：强风场景参数。
+- `config/gpm_params.yaml`：GPM 求解器权重与约束。
+- `config/optimization.yaml`：优化策略参数（辅助）。
+- `config/dynamics_params.yaml`：动力学/气动参数。
+- `config/guidance_params.yaml`：CRUISE/APPROACH/FLARE 参数。
+- `config/library_params.yaml`：轨迹库生成网格（coarse）。
+- `config/library_params_full.yaml`：高风险 fine 网格（非均匀 + mixed 6DOF 抽检）。
+- `config/library_params_6dof_validation.yaml`：小规模 6DOF 验证网格。
 
 常用开关：
 
@@ -155,6 +170,14 @@ library_path: "/tmp/parafoil_library.pkl"
 library:
   coarse_path: "/tmp/parafoil_library_coarse.pkl"
   fine_path: "/tmp/parafoil_library_fine.pkl"
+  require_coarse_match: true
+  fallback_to_coarse: true
+
+# 仅 coarse 库也可运行（fine 为空时自动跳过 fine 阶段）
+use_library: true
+library:
+  coarse_path: "/tmp/parafoil_library_coarse.pkl"
+  fine_path: ""
   require_coarse_match: true
   fallback_to_coarse: true
 

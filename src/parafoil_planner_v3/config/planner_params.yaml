@@ -1,11 +1,11 @@
 parafoil_planner_v3:
   ros__parameters:
-    # Planner core
+    # === Core ===
+    planner_rate_hz: 1.0
     use_library: false
     library_path: ""
-    planner_rate_hz: 1.0
 
-    # Library selection (online)
+    # === Library (online matching) ===
     library:
       k_neighbors: 5
       enable_gpm_fine_tuning: true
@@ -17,21 +17,21 @@ parafoil_planner_v3:
       cost_w_time: 0.02
       cost_w_path_length: 0.0
 
-    # GPM settings
+    # === GPM (online optimization) ===
     gpm:
       num_nodes: 20
       scheme: "LGL"
       tf_guess: 30.0
       max_constraint_violation_for_accept: 0.5
 
-    # Fallback direct path (used when no library/GPM)
+    # === Fallback direct path (used when no library/GPM) ===
     fallback:
       dt: 1.0
       brake: 0.2
       wind_correction_gain: 1.0
       min_ground_speed: 0.5
 
-    # Noise model (planner state estimation)
+    # === Noise model (planner state estimation) ===
     noise:
       position_sigma: [0.5, 0.5, 0.3]          # m
       velocity_sigma: [0.1, 0.1, 0.05]         # m/s
@@ -39,7 +39,7 @@ parafoil_planner_v3:
       angular_rate_sigma: [0.005, 0.005, 0.01] # rad/s
       seed: 0
 
-    # Default target (used if /target not received)
+    # === Default target (used if /target not received) ===
     target:
       position_ned: [0.0, 0.0, 0.0]
       auto_mode: "manual"
@@ -57,7 +57,7 @@ parafoil_planner_v3:
         smooth_transition: false
         smooth_rate_mps: 5.0
 
-    # Safety-first landing site selection (disabled by default)
+    # === Safety-first landing site selection (disabled by default) ===
     safety:
       enable: false
       selector:

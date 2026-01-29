@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import random
 import time
 from pathlib import Path
 
@@ -95,11 +96,20 @@ def _resolve_num_workers(raw_value, task_count: int) -> tuple[int, float | None]
     return max(1, min(requested, max_workers, max(task_count, 1))), None
 
 
+def _build_tasks(scenario_cfg: ScenarioConfig, types: list[TrajectoryType]) -> list[tuple]:
+    scenarios = TrajectoryLibraryGenerator().enumerate_scenarios(scenario_cfg)
+    return [(s, t) for s in scenarios for t in types]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Generate parafoil_planner_v3 trajectory library (offline).")
     parser.add_argument("--config", type=str, required=True, help="Path to library_params.yaml")
     parser.add_argument("--output", type=str, required=True, help="Output pickle path")
     parser.add_argument("--method", type=str, default="", help="Override generation method: template|gpm")
+    parser.add_argument("--estimate", action="store_true", help="Sample a subset and estimate full runtime (GPM only).")
+    parser.add_argument("--sample-fraction", type=float, default=0.0, help="Sample fraction for estimate (e.g. 0.01).")
+    parser.add_argument("--sample-count", type=int, default=0, help="Sample count for estimate (overrides fraction).")
+    parser.add_argument("--sample-seed", type=int, default=7, help="Random seed for estimate sampling.")
     args = parser.parse_args()
 
     cfg = _load_yaml(args.config)
@@ -125,6 +135,9 @@ def main() -> None:
     types = [TrajectoryType(t) for t in traj_types]
 
     if method == "template":
+        if args.estimate:
+            print("Estimate mode is only supported for GPM generation (template is already fast).")
+            return
         lib = TrajectoryLibraryGenerator().generate_library(scenario_cfg, str(out))
         print(f"Generated TEMPLATE library: {len(lib)} trajectories -> {out}")
         return
@@ -138,6 +151,8 @@ def main() -> None:
         ftol=float(gpm.get("tolerance", 1e-6)),
         w_u_ref=float(gpm.get("w_u_ref", 2.0)),
         dynamics_mode=str(gpm.get("dynamics_mode", "simplified")),
+        sixdof_ratio=float(gpm.get("sixdof_ratio", 0.0)),
+        sixdof_seed=int(gpm.get("sixdof_seed", 0)),
         delta_a_amp=float(gpm.get("delta_a_amp", 0.4)),
         s_turn_cycles=float(gpm.get("s_turn_cycles", 2.0)),
         spiral_delta_a_sign=float(gpm.get("spiral_delta_a_sign", 1.0)),
@@ -172,6 +187,38 @@ def main() -> None:
         print(f"Using workers={num_workers} (cpu_count={os.cpu_count()})")
     else:
         print(f"Auto workers={num_workers} (cpu_count={os.cpu_count()}, cpu_usage={usage:.0%}, tasks={task_count})")
+
+    if args.estimate:
+        tasks = _build_tasks(scenario_cfg, types)
+        total = len(tasks)
+        if total == 0:
+            print("[estimate] No tasks found; check config.")
+            return
+        sample_n = int(args.sample_count or 0)
+        if sample_n <= 0:
+            frac = float(args.sample_fraction or 0.0)
+            sample_n = int(round(total * frac)) if frac > 0.0 else max(1, total // 100)
+        sample_n = max(1, min(sample_n, total))
+        if sample_n < total:
+            rng = random.Random(int(args.sample_seed))
+            tasks = rng.sample(tasks, sample_n)
+        print(f"[estimate] Sampling {sample_n}/{total} tasks (seed={int(args.sample_seed)})...")
+        start = time.perf_counter()
+        GPMTrajectoryLibraryGenerator(gpm_cfg).generate_library_from_tasks(
+            tasks=tasks,
+            output_path=str(out),
+            num_workers=num_workers,
+            save=False,
+        )
+        elapsed = time.perf_counter() - start
+        rate = sample_n / max(elapsed, 1e-9)
+        est = float(total) / max(rate, 1e-9)
+        print(
+            "[estimate] "
+            f"elapsed={elapsed:0.1f}s avg={elapsed/sample_n:0.3f}s/task "
+            f"throughput={rate:0.2f} task/s -> est_total={est/60.0:0.1f} min"
+        )
+        return
 
     lib = GPMTrajectoryLibraryGenerator(gpm_cfg).generate_library(
         scenario_cfg=scenario_cfg,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
@@ -36,7 +37,9 @@ class GPMGenerationConfig:
     maxiter: int = 400
     ftol: float = 1e-6
     w_u_ref: float = 2.0
-    dynamics_mode: str = "simplified"  # simplified | 6dof
+    dynamics_mode: str = "simplified"  # simplified | 6dof | mixed
+    sixdof_ratio: float = 0.0  # when dynamics_mode == "mixed"
+    sixdof_seed: int = 0
 
     # Reference control shaping
     delta_a_amp: float = 0.4
@@ -452,6 +455,24 @@ def _solve_gpm_task(task: Tuple[Scenario, TrajectoryType]) -> Optional[LibraryTr
     wind_I = _scenario_to_wind_I(scenario)
 
     dynamics_mode = str(getattr(gpm_cfg, "dynamics_mode", "simplified")).strip().lower()
+    if dynamics_mode in {"mixed", "hybrid"}:
+        ratio = float(getattr(gpm_cfg, "sixdof_ratio", 0.0))
+        ratio = max(0.0, min(1.0, ratio))
+        if ratio <= 0.0:
+            dynamics_mode = "simplified"
+        elif ratio >= 1.0:
+            dynamics_mode = "6dof"
+        else:
+            seed = int(getattr(gpm_cfg, "sixdof_seed", 0))
+            key = (
+                f"{seed}|{scenario.wind_speed:.3f}|{scenario.wind_direction_deg:.3f}|"
+                f"{scenario.initial_altitude_m:.3f}|{scenario.target_distance_m:.3f}|"
+                f"{scenario.target_bearing_deg:.3f}|{traj_type.value}"
+            )
+            digest = hashlib.blake2b(key.encode("utf-8"), digest_size=8).digest()
+            u = int.from_bytes(digest, "little") / float(2**64)
+            dynamics_mode = "6dof" if u < ratio else "simplified"
+
     if dynamics_mode in {"6dof", "6-dof", "sixdof"}:
         dyn = dyn_6dof
         dyn_tag = "6dof"
@@ -845,6 +866,16 @@ class GPMTrajectoryLibraryGenerator:
         types = list(trajectory_types or (TrajectoryType.DIRECT, TrajectoryType.S_TURN, TrajectoryType.RACETRACK, TrajectoryType.SPIRAL))
 
         tasks: List[Tuple[Scenario, TrajectoryType]] = [(s, t) for s in scenarios for t in types]
+        return self.generate_library_from_tasks(tasks=tasks, output_path=output_path, num_workers=num_workers, save=True)
+
+    def generate_library_from_tasks(
+        self,
+        tasks: Sequence[Tuple[Scenario, TrajectoryType]],
+        output_path: str,
+        num_workers: int = 1,
+        save: bool = True,
+    ) -> TrajectoryLibrary:
+        tasks = list(tasks)
 
         results: List[LibraryTrajectory] = []
 
@@ -894,7 +925,8 @@ class GPMTrajectoryLibraryGenerator:
                     _print_progress(done)
 
         lib = TrajectoryLibrary(results)
-        lib.build_index()
-        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-        lib.save(output_path)
+        if save:
+            lib.build_index()
+            Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+            lib.save(output_path)
         return lib

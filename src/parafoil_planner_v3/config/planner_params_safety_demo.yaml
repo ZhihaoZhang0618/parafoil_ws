@@ -1,37 +1,43 @@
 parafoil_planner_v3:
   ros__parameters:
+    # === Core ===
     planner_rate_hz: 1.0
     use_library: true
     library_path: ""
 
+    # === Library (online matching) ===
     library:
-      enable_gpm_fine_tuning: false
       coarse_path: "/tmp/parafoil_library_coarse.pkl"
       fine_path: "/tmp/parafoil_library_fine.pkl"
-      coarse_k_neighbors: 5
-      fine_k_neighbors: 5
+      coarse_k_neighbors: 7
+      fine_k_neighbors: 7
       require_coarse_match: true
       fallback_to_coarse: true
-      # Safety gates (tighten to ensure library is used only when closely matched)
-      max_altitude_error_m: 20.0
-      max_distance_error_m: 30.0
-      max_bearing_error_deg: 30.0
-      max_wind_speed_error_mps: 1.0
-      max_rel_wind_error_deg: 30.0
-      min_scale_xy: 0.7
-      max_scale_xy: 1.3
-      min_scale_z: 0.7
-      max_scale_z: 1.3
+      enable_gpm_fine_tuning: true
+      fine_tuning_trigger_m: 25.0
+      # Safety gates (tuned for higher hit rate but still bounded)
+      max_altitude_error_m: 30.0
+      max_distance_error_m: 40.0
+      max_bearing_error_deg: 40.0
+      max_wind_speed_error_mps: 1.5
+      max_rel_wind_error_deg: 40.0
+      min_scale_xy: 0.65
+      max_scale_xy: 1.35
+      min_scale_z: 0.65
+      max_scale_z: 1.35
 
+    # === GPM (online optimization) ===
     gpm:
-      num_nodes: 20
+      num_nodes: 12
       scheme: "LGL"
       tf_guess: 30.0
       max_constraint_violation_for_accept: 0.5
 
+    # === Solver guardrails ===
     solver:
-      max_solve_time_s: 0.5
+      max_solve_time_s: 0.25
 
+    # === Environment constraints ===
     constraints:
       terrain_type: "flat"
       terrain_height0_m: 0.0
@@ -41,10 +47,12 @@ parafoil_planner_v3:
       # JSON-encoded list of polygons
       no_fly_polygons: "[[[-30.0,-60.0],[-30.0,-20.0],[10.0,-20.0],[10.0,-60.0]]]"
 
+    # === Wind input ===
     wind:
       use_topic: true
       default_ned: [0.0, 4.0, 0.0]
 
+    # === Target & update policy ===
     target:
       position_ned: [150.0, 0.0, 0.0]
       auto_mode: "reach_center"
@@ -62,6 +70,7 @@ parafoil_planner_v3:
         smooth_transition: false
         smooth_rate_mps: 5.0
 
+    # === Safety-first landing site selection ===
     safety:
       enable: true
       selector:
