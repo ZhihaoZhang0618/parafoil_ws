@@ -1,0 +1,9 @@
+parafoil_simulator:
+  ros__parameters:
+    initial_position: [0.0, 0.0, -80.0]
+    initial_velocity: [4.5, 0.0, 0.9]
+    wind:
+      enable_steady: true
+      enable_gust: false
+      enable_colored: false
+      steady_wind: [0.0, 4.0, 0.0]

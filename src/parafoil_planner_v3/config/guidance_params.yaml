@@ -9,6 +9,12 @@ parafoil_guidance_v3:
       use_topic: true
       topic: "/wind_estimate"
       default_ned: [0.0, 2.0, 0.0]
+      # Incoming /wind_estimate is assumed NED + wind-to by default.
+      # If your estimator outputs ENU or wind-from, override these:
+      input_frame: "ned"    # ned|enu|auto
+      convention: "to"      # to|from
+      timeout_s: 2.0
+      max_speed_mps: 0.0    # 0 disables clipping
       filter:
         enable: true
         tau_s: 2.0

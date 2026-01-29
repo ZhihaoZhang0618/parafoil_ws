@@ -5,7 +5,7 @@ All aerodynamic coefficients follow the naming convention from the project requi
 - Lift: c_L0, c_La, c_Lds
 - Drag: c_D0, c_Da2, c_Dds  
 - Side force: c_Yb
-- Moments/Damping: c_lp, c_lda, c_m0, c_ma, c_mq, c_nr, c_nda
+- Moments/Damping: c_lp, c_lda, c_m0, c_ma, c_mq, c_mds, c_nr, c_nda
 """
 
 from dataclasses import dataclass, field
@@ -51,6 +51,7 @@ class Params:
         c_m0: Pitching moment at zero alpha
         c_ma: Pitching moment slope (dC_m/dalpha)
         c_mq: Pitch damping derivative
+        c_mds: Pitching moment due to symmetric brake (flare effect)
         c_nr: Yaw damping derivative
         c_nda: Yaw due to asymmetric brake
     
@@ -137,7 +138,8 @@ class Params:
     c_m0: float = 0.1       # Zero-alpha pitching moment
     c_ma: float = -0.72     # Pitching moment slope [1/rad]
     c_mq: float = -1.49     # Pitch damping derivative
-    
+    c_mds: float = 0.0      # Symmetric brake -> pitch moment (flare/zoom). Default off; tune per airframe.
+
     # Yaw moment coefficients (from reference model)
     c_nr: float = -0.27     # Yaw damping derivative
     c_nda: float = -0.133   # Yaw due to asymmetric brake (negative: left brake -> turn left)
@@ -188,7 +190,7 @@ class Params:
             c_D0=self.c_D0, c_Da2=self.c_Da2, c_Dds=self.c_Dds,
             c_Yb=self.c_Yb,
             c_lp=self.c_lp, c_lda=self.c_lda, c_lb=self.c_lb,
-            c_m0=self.c_m0, c_ma=self.c_ma, c_mq=self.c_mq,
+            c_m0=self.c_m0, c_ma=self.c_ma, c_mq=self.c_mq, c_mds=self.c_mds,
             c_nr=self.c_nr, c_nda=self.c_nda, c_nb=self.c_nb, c_n_weath=self.c_n_weath,
             tau_act=self.tau_act,
             eps=self.eps, V_min=self.V_min
@@ -207,7 +209,7 @@ class Params:
             'c_D0', 'c_Da2', 'c_Dds',
             'c_Yb',
             'c_lp', 'c_lda', 'c_lb',
-            'c_m0', 'c_ma', 'c_mq',
+            'c_m0', 'c_ma', 'c_mq', 'c_mds',
             'c_nr', 'c_nda', 'c_nb', 'c_n_weath',
             'tau_act', 'eps', 'V_min'
         ]
@@ -261,7 +263,7 @@ class Params:
             ('c_D0', 0.1), ('c_Da2', 0.5), ('c_Dds', 0.4),
             ('c_Yb', -0.3),
             ('c_lp', -0.4), ('c_lda', 0.1),
-            ('c_m0', 0.02), ('c_ma', -0.5), ('c_mq', -2.0),
+            ('c_m0', 0.02), ('c_ma', -0.5), ('c_mq', -2.0), ('c_mds', 0.0),
             ('c_nr', -0.3), ('c_nda', -0.05),
             ('tau_act', 0.2), ('eps', 1e-6), ('V_min', 1.0)
         ]
@@ -293,7 +295,7 @@ class Params:
             'c_D0': self.c_D0, 'c_Da2': self.c_Da2, 'c_Dds': self.c_Dds,
             'c_Yb': self.c_Yb,
             'c_lp': self.c_lp, 'c_lda': self.c_lda, 'c_lb': self.c_lb,
-            'c_m0': self.c_m0, 'c_ma': self.c_ma, 'c_mq': self.c_mq,
+            'c_m0': self.c_m0, 'c_ma': self.c_ma, 'c_mq': self.c_mq, 'c_mds': self.c_mds,
             'c_nr': self.c_nr, 'c_nda': self.c_nda, 'c_nb': self.c_nb, 'c_n_weath': self.c_n_weath,
             'tau_act': self.tau_act,
             'eps': self.eps, 'V_min': self.V_min

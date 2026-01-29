@@ -19,6 +19,15 @@ from parafoil_planner_v3.guidance.phase_manager import PhaseManager
 from parafoil_planner_v3.guidance.wind_filter import WindFilter, WindFilterConfig
 from parafoil_planner_v3.dynamics.aerodynamics import PolarTable
 from parafoil_planner_v3.types import Control, GuidancePhase, State, Target, Wind
+from parafoil_planner_v3.utils.wind_utils import (
+    WindConvention,
+    WindInputFrame,
+    clip_wind_xy,
+    frame_from_frame_id,
+    parse_wind_convention,
+    parse_wind_input_frame,
+    to_ned_wind_to,
+)
 
 
 def _stamp_to_sec(stamp) -> float:
@@ -41,6 +50,11 @@ class GuidanceNode(Node):
         self.declare_parameter("wind.use_topic", True)
         self.declare_parameter("wind.topic", "/wind_estimate")
         self.declare_parameter("wind.default_ned", [0.0, 2.0, 0.0])
+        # /wind_estimate conversion -> internal standard: NED + wind-to
+        self.declare_parameter("wind.input_frame", "ned")  # ned|enu|auto
+        self.declare_parameter("wind.convention", "to")  # to|from
+        self.declare_parameter("wind.timeout_s", 2.0)
+        self.declare_parameter("wind.max_speed_mps", 0.0)  # 0 disables clipping
         self.declare_parameter("wind.filter.enable", True)
         self.declare_parameter("wind.filter.tau_s", 2.0)
         self.declare_parameter("wind.filter.max_delta_mps", 2.0)
@@ -100,7 +114,12 @@ class GuidanceNode(Node):
 
         # State
         self._odom: Optional[Odometry] = None
-        self._wind: Optional[np.ndarray] = None
+        self._wind_ned_to: Optional[np.ndarray] = None
+        self._wind_recv_time_s: Optional[float] = None
+        self._wind_frame_id: str = ""
+        self._wind_input_frame_used: str = ""
+        self._wind_convention_used: str = ""
+        self._wind_clipped: bool = False
         self._target_ned: np.ndarray = np.asarray(self.get_parameter("target.position_ned").value, dtype=float).reshape(3)
         self._path_ned: list[np.ndarray] = []
         self._last_tick_time: float | None = None
@@ -207,7 +226,42 @@ class GuidanceNode(Node):
         self._odom = msg
 
     def _on_wind(self, msg: Vector3Stamped) -> None:
-        self._wind = np.array([msg.vector.x, msg.vector.y, msg.vector.z], dtype=float)
+        raw = np.array([msg.vector.x, msg.vector.y, msg.vector.z], dtype=float)
+        now_s = self.get_clock().now().nanoseconds * 1e-9
+
+        input_frame_raw = str(self.get_parameter("wind.input_frame").value)
+        convention_raw = str(self.get_parameter("wind.convention").value)
+        try:
+            input_frame = parse_wind_input_frame(input_frame_raw)
+        except ValueError as e:
+            self.get_logger().error(str(e))
+            input_frame = WindInputFrame.NED
+        try:
+            convention = parse_wind_convention(convention_raw)
+        except ValueError as e:
+            self.get_logger().error(str(e))
+            convention = WindConvention.TO
+
+        input_frame_used = input_frame
+        if input_frame == WindInputFrame.AUTO:
+            guessed = frame_from_frame_id(msg.header.frame_id)
+            input_frame_used = guessed if guessed is not None else WindInputFrame.NED
+
+        try:
+            wind_ned = to_ned_wind_to(raw, input_frame=input_frame_used, convention=convention)
+        except Exception as e:
+            self.get_logger().error(f"Failed to convert wind estimate: {e}")
+            return
+
+        max_speed_mps = float(self.get_parameter("wind.max_speed_mps").value)
+        wind_ned, clipped = clip_wind_xy(wind_ned, max_speed_mps=max_speed_mps)
+
+        self._wind_ned_to = wind_ned
+        self._wind_recv_time_s = now_s
+        self._wind_frame_id = str(msg.header.frame_id)
+        self._wind_input_frame_used = input_frame_used.value
+        self._wind_convention_used = convention.value
+        self._wind_clipped = bool(clipped)
 
     def _on_target(self, msg: PoseStamped) -> None:
         p_enu = np.array([msg.pose.position.x, msg.pose.position.y, msg.pose.position.z], dtype=float)
@@ -221,11 +275,39 @@ class GuidanceNode(Node):
             pts.append(np.array([p_enu.y, p_enu.x], dtype=float))
         self._path_ned = pts
 
-    def _wind_est(self) -> Wind:
-        if self._wind is not None:
-            return Wind(v_I=self._wind)
-        default = np.asarray(self.get_parameter("wind.default_ned").value, dtype=float).reshape(3)
-        return Wind(v_I=default)
+    def _wind_est(self) -> tuple[Wind, dict]:
+        now_s = self.get_clock().now().nanoseconds * 1e-9
+        diag = {
+            "source": "default",
+            "age_s": float("inf"),
+            "frame_id": str(self._wind_frame_id),
+            "input_frame": str(self._wind_input_frame_used),
+            "convention": str(self._wind_convention_used),
+            "clipped": bool(self._wind_clipped),
+        }
+
+        if not bool(self.get_parameter("wind.use_topic").value):
+            default = np.asarray(self.get_parameter("wind.default_ned").value, dtype=float).reshape(3)
+            diag["source"] = "param"
+            diag["age_s"] = 0.0
+            return Wind(v_I=default), diag
+
+        if self._wind_ned_to is None or self._wind_recv_time_s is None:
+            default = np.asarray(self.get_parameter("wind.default_ned").value, dtype=float).reshape(3)
+            diag["source"] = "default(no_msg)"
+            diag["age_s"] = float("inf")
+            return Wind(v_I=default), diag
+
+        timeout_s = float(self.get_parameter("wind.timeout_s").value)
+        age_s = float(now_s - self._wind_recv_time_s)
+        diag["age_s"] = float(age_s)
+        if timeout_s > 0.0 and age_s > timeout_s:
+            default = np.asarray(self.get_parameter("wind.default_ned").value, dtype=float).reshape(3)
+            diag["source"] = "default(stale)"
+            return Wind(v_I=default), diag
+
+        diag["source"] = "topic"
+        return Wind(v_I=self._wind_ned_to), diag
 
     def _state(self) -> Optional[State]:
         if self._odom is None:
@@ -293,7 +375,7 @@ class GuidanceNode(Node):
         if state is None:
             return
         target = Target(p_I=self._target_ned)
-        raw_wind = self._wind_est()
+        raw_wind, _wind_diag = self._wind_est()
         dt = 0.0 if self._last_tick_time is None else float(max(state.t - self._last_tick_time, 0.0))
         self._last_tick_time = float(state.t)
         filtered = self._wind_filter.update(raw_wind.v_I, dt)

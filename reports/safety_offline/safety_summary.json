@@ -1,0 +1,883 @@
+{
+  "summary": {
+    "n_runs": 50,
+    "reachable_rate": 1.0,
+    "risk": {
+      "mean": 0.0,
+      "p50": 0.0,
+      "p95": 0.0
+    },
+    "desired_risk": {
+      "mean": 0.0,
+      "p50": 0.0,
+      "p95": 0.0
+    },
+    "risk_reduction": {
+      "mean": 0.0,
+      "p50": 0.0,
+      "p95": 0.0
+    },
+    "distance_to_desired_m": {
+      "mean": 260.47761707078985,
+      "p50": 248.48325621051868,
+      "p95": 519.1503593912936
+    },
+    "reach_margin_mps": {
+      "mean": 3.1913777366639637,
+      "p50": 3.678412670329462,
+      "p95": 3.8953593324486957
+    }
+  },
+  "results": [
+    {
+      "scenario": {
+        "altitude_m": 93.75668266232668,
+        "distance_m": 205.60993213574056,
+        "bearing_deg": 99.24684848826968,
+        "wind_speed_mps": 1.3512431399435512,
+        "wind_direction_deg": 108.05986256804115
+      },
+      "reachable": true,
+      "reason": "ok",
+      "risk": 0.0,
+      "desired_risk": 0.0,
+      "risk_reduction": 0.0,
+      "distance_to_desired_m": 0.0,
+      "reach_margin_mps": 2.8085813087471188,
+      "time_to_land_s": 82.9705156303776
+    },
+    {
+      "scenario": {
+        "altitude_m": 111.14874117773833,
+        "distance_m": 80.73714263918046,
+        "bearing_deg": 115.64223061779586,
+        "wind_speed_mps": 4.782416572512277,
+        "wind_direction_deg": 168.45658302373948
+      },
+      "reachable": true,
+      "reason": "ok",
+      "risk": 0.0,
+      "desired_risk": 0.0,
+      "risk_reduction": 0.0,
+      "distance_to_desired_m": 443.28396577549927,
+      "reach_margin_mps": 3.7680672066629515,
+      "time_to_land_s": 98.3617178564056
+    },
+    {
+      "scenario": {
+        "altitude_m": 71.21226987735194,
+        "distance_m": 118.97958569410827,
+        "bearing_deg": -88.24694844451514,
+        "wind_speed_mps": 2.6704578352958794,
+        "wind_direction_deg": 181.63737322486318
+      },
+      "reachable": true,
+      "reason": "ok",
+      "risk": 0.0,
+      "desired_risk": 0.0,
+      "risk_reduction": 0.0,
+      "distance_to_desired_m": 218.34449049310794,
+      "reach_margin_mps": 3.778751286340778,
+      "time_to_land_s": 63.019707856063675
+    },
+    {
+      "scenario": {
+        "altitude_m": 88.74481464521448,
+        "distance_m": 219.37003968081498,
+        "bearing_deg": 105.35829091695109,
+        "wind_speed_mps": 3.733075376646976,
+        "wind_direction_deg": 356.02565316547856
+      },
+      "reachable": true,
+      "reason": "ok",
+      "risk": 0.0,
+      "desired_risk": 0.0,
+      "risk_reduction": 0.0,
+      "distance_to_desired_m": 398.971110567743,
+      "reach_margin_mps": 3.6325173429186823,
+      "time_to_land_s": 78.53523419930485
+    },
+    {
+      "scenario": {
+        "altitude_m": 65.07160887649192,
+        "distance_m": 102.42968474009824,
+        "bearing_deg": 40.514257538291076,
+        "wind_speed_mps": 0.2636520477683002,
+        "wind_direction_deg": 12.84490035849461
+      },
+      "reachable": true,
+      "reason": "ok",
+      "risk": 0.0,
+      "desired_risk": 0.0,
+      "risk_reduction": 0.0,
+      "distance_to_desired_m": 20.721387467630542,
+      "reach_margin_mps": 2.0732693132794875,
+      "time_to_land_s": 57.585494580966305
+    },
+    {
+      "scenario": {
+        "altitude_m": 86.04221741899592,
+        "distance_m": 145.26884354554048,
+        "bearing_deg": 150.1803983494268,
+        "wind_speed_mps": 3.7753575269460624,
+        "wind_direction_deg": 185.082352775825
+      },
+      "reachable": true,
+      "reason": "ok",
+      "risk": 0.0,
+      "desired_risk": 0.0,
+      "risk_reduction": 0.0,
+      "distance_to_desired_m": 190.2074516452569,
+      "reach_margin_mps": 3.9106230223822718,
+      "time_to_land_s": 76.14355523804949
+    },
+    {
+      "scenario": {
+        "altitude_m": 84.7811404775453,
+        "distance_m": 114.65208908382633,
+        "bearing_deg": -175.7541508046979,
+        "wind_speed_mps": 1.1544128639118638,
+        "wind_direction_deg": 249.1315635174621
+      },
+      "reachable": true,
+      "reason": "ok",
+      "risk": 0.0,
+      "desired_risk": 0.0,
+      "risk_reduction": 0.0,
+      "distance_to_desired_m": 81.74128069196799,
+      "reach_margin_mps": 2.454905204745196,
+      "time_to_land_s": 75.02755794473036
+    },
+    {
+      "scenario": {
+        "altitude_m": 64.04247067908966,
+        "distance_m": 131.73508348430894,
+        "bearing_deg": -178.65567286125267,
+        "wind_speed_mps": 4.980286378810473,
+        "wind_direction_deg": 55.60598918211835
+      },
+      "reachable": true,
+      "reason": "ok",
+      "risk": 0.0,
+      "desired_risk": 0.0,
+      "risk_reduction": 0.0,
+      "distance_to_desired_m": 369.49485017906056,
+      "reach_margin_mps": 3.8518066618967675,
+      "time_to_land_s": 56.674752813353685
+    },
+    {
+      "scenario": {
+        "altitude_m": 68.73195131946498,
+        "distance_m": 203.246501557316,
+        "bearing_deg": 3.5246915526323335,
+        "wind_speed_mps": 5.082901478195216,
+        "wind_direction_deg": 230.29818009930943
+      },
+      "reachable": true,
+      "reason": "ok",
+      "risk": 0.0,
+      "desired_risk": 0.0,
+      "risk_reduction": 0.0,
+      "distance_to_desired_m": 479.6865328986792,
+      "reach_margin_mps": 3.7233543763921744,
+      "time_to_land_s": 60.82473568094247
+    },
+    {
+      "scenario": {
+        "altitude_m": 101.92396631533,
+        "distance_m": 92.8093847088264,
+        "bearing_deg": 14.811775695535943,
+        "wind_speed_mps": 3.0466334178020995,
+        "wind_direction_deg": 313.682175609437
+      },
+      "reachable": true,
+      "reason": "ok",
+      "risk": 0.0,
+      "desired_risk": 0.0,
+      "risk_reduction": 0.0,
+      "distance_to_desired_m": 243.7899148659098,
+      "reach_margin_mps": 3.738447461508219,
+      "time_to_land_s": 90.19820027905311
+    },
+    {
+      "scenario": {
+        "altitude_m": 75.28848413099104,
+        "distance_m": 163.74576940900982,
+        "bearing_deg": -158.6694087556187,
+        "wind_speed_mps": 2.325790806664372,
+        "wind_direction_deg": 116.29308465295439
+      },
+      "reachable": true,
+      "reason": "ok",
+      "risk": 0.0,
+      "desired_risk": 0.0,
+      "risk_reduction": 0.0,
+      "distance_to_desired_m": 213.0135484356391,
+      "reach_margin_mps": 3.805716754848359,
+      "time_to_land_s": 66.62697710707172
+    },
+    {
+      "scenario": {
+        "altitude_m": 60.51398103493163,
+        "distance_m": 194.2873345346706,
+        "bearing_deg": -43.39937824188752,
+        "wind_speed_mps": 5.872487306467329,
+        "wind_direction_deg": 212.3970094838197
+      },
+      "reachable": true,
+      "reason": "ok",
+      "risk": 0.0,
+      "desired_risk": 0.0,
+      "risk_reduction": 0.0,
+      "distance_to_desired_m": 429.5682710400288,
+      "reach_margin_mps": 3.5667321728379235,
+      "time_to_land_s": 53.55219560613419
+    },
+    {
+      "scenario": {
+        "altitude_m": 92.3539377680896,
+        "distance_m": 169.3195213103665,
+        "bearing_deg": 63.52208777260378,
+        "wind_speed_mps": 0.9047281150102122,
+        "wind_direction_deg": 158.51284818774752
+      },
+      "reachable": true,
+      "reason": "ok",
+      "risk": 0.0,
+      "desired_risk": 0.0,
+      "risk_reduction": 0.0,
+      "distance_to_desired_m": 0.0,
+      "reach_margin_mps": 1.6383367442569865,
+      "time_to_land_s": 81.72914846733593
+    },
+    {
+      "scenario": {
+        "altitude_m": 66.76947732806663,
+        "distance_m": 136.34976173455743,
+        "bearing_deg": -145.18652618457156,
+        "wind_speed_mps": 5.806968306292928,
+        "wind_direction_deg": 77.40145344811681
+      },
+      "reachable": true,
+      "reason": "ok",
+      "risk": 0.0,
+      "desired_risk": 0.0,
+      "risk_reduction": 0.0,
+      "distance_to_desired_m": 456.96121949405614,
+      "reach_margin_mps": 3.885610895731871,
+      "time_to_land_s": 59.08803303368729
+    },
+    {
+      "scenario": {
+        "altitude_m": 97.02356138278995,
+        "distance_m": 122.05881140706984,
+        "bearing_deg": 134.66772941382158,
+        "wind_speed_mps": 3.9732884300307227,
+        "wind_direction_deg": 47.38169369099006
+      },
+      "reachable": true,
+      "reason": "ok",
+      "risk": 0.0,
+      "desired_risk": 0.0,
+      "risk_reduction": 0.0,
+      "distance_to_desired_m": 358.3066153468162,
+      "reach_margin_mps": 3.90679643325428,
+      "time_to_land_s": 85.86155874583183
+    },
+    {
+      "scenario": {
+        "altitude_m": 109.1552024612187,
+        "distance_m": 212.29274396029714,
+        "bearing_deg": 145.41004375053365,
+        "wind_speed_mps": 3.4183148871556632,
+        "wind_direction_deg": 52.36558335393369
+      },
+      "reachable": true,
+      "reason": "ok",
+      "risk": 0.0,
+      "desired_risk": 0.0,
+      "risk_reduction": 0.0,
+      "distance_to_desired_m": 413.63505155184845,
+      "reach_margin_mps": 3.7451590961976677,
+      "time_to_land_s": 96.59752430196346
+    },
+    {
+      "scenario": {
+        "altitude_m": 63.47244464778326,
+        "distance_m": 209.9067958642334,
+        "bearing_deg": 18.837535560214974,
+        "wind_speed_mps": 1.0833149906934698,
+        "wind_direction_deg": 318.2604819107292
+      },
+      "reachable": true,
+      "reason": "ok",
+      "risk": 0.0,
+      "desired_risk": 0.0,
+      "risk_reduction": 0.0,
+      "distance_to_desired_m": 0.0,
+      "reach_margin_mps": 0.6291871300727117,
+      "time_to_land_s": 56.17030499803829
+    },
+    {
+      "scenario": {
+        "altitude_m": 94.91001936557365,
+        "distance_m": 159.7571984263331,
+        "bearing_deg": -44.536378993228766,
+        "wind_speed_mps": 2.465731692942779,
+        "wind_direction_deg": 86.21611656546415
+      },
+      "reachable": true,
+      "reason": "ok",
+      "risk": 0.0,
+      "desired_risk": 0.0,
+      "risk_reduction": 0.0,
+      "distance_to_desired_m": 350.6939837034829,
+      "reach_margin_mps": 3.7422250157636716,
+      "time_to_land_s": 83.99116758015367
+    },
+    {
+      "scenario": {
+        "altitude_m": 52.66401006838674,
+        "distance_m": 202.67063313529792,
+        "bearing_deg": -11.617121946925408,
+        "wind_speed_mps": 3.2858111952824114,
+        "wind_direction_deg": 115.97879152088105
+      },
+      "reachable": true,
+      "reason": "ok",
+      "risk": 0.0,
+      "desired_risk": 0.0,
+      "risk_reduction": 0.0,
+      "distance_to_desired_m": 315.03287957652475,
+      "reach_margin_mps": 3.7586495599517304,
+      "time_to_land_s": 46.605318644590035
+    },
+    {
+      "scenario": {
+        "altitude_m": 102.59274438984495,
+        "distance_m": 83.52756191224645,
+        "bearing_deg": -46.01330187652658,
+        "wind_speed_mps": 0.1821017663046698,
+        "wind_direction_deg": 44.24115679380336
+      },
+      "reachable": true,
+      "reason": "ok",
+      "risk": 0.0,
+      "desired_risk": 0.0,
+      "risk_reduction": 0.0,
+      "distance_to_desired_m": 72.1715810314185,
+      "reach_margin_mps": 3.8152283575660695,
+      "time_to_land_s": 90.79003928304864
+    },
+    {
+      "scenario": {
+        "altitude_m": 117.70037647781574,
+        "distance_m": 172.08650220539204,
+        "bearing_deg": -25.840711299786733,
+        "wind_speed_mps": 3.142440647462882,
+        "wind_direction_deg": 314.21131508331877
+      },
+      "reachable": true,
+      "reason": "ok",
+      "risk": 0.0,
+      "desired_risk": 0.0,
+      "risk_reduction": 0.0,
+      "distance_to_desired_m": 217.44128130282772,
+      "reach_margin_mps": 3.5609640726074745,
+      "time_to_land_s": 104.15962520160686
+    },
+    {
+      "scenario": {
+        "altitude_m": 74.09474668972183,
+        "distance_m": 162.64073752056004,
+        "bearing_deg": 66.12637440223574,
+        "wind_speed_mps": 2.132482662141072,
+        "wind_direction_deg": 186.87545513855645
+      },
+      "reachable": true,
+      "reason": "ok",
+      "risk": 0.0,
+      "desired_risk": 0.0,
+      "risk_reduction": 0.0,
+      "distance_to_desired_m": 282.0954205633828,
+      "reach_margin_mps": 3.640724546115931,
+      "time_to_land_s": 65.57057229178923
+    },
+    {
+      "scenario": {
+        "altitude_m": 103.56731682949658,
+        "distance_m": 207.28510395867704,
+        "bearing_deg": -125.61757989234641,
+        "wind_speed_mps": 5.600516353844571,
+        "wind_direction_deg": 1.8643916935555715
+      },
+      "reachable": true,
+      "reason": "ok",
+      "risk": 0.0,
+      "desired_risk": 0.0,
+      "risk_reduction": 0.0,
+      "distance_to_desired_m": 643.1521742351815,
+      "reach_margin_mps": 3.748700329778409,
+      "time_to_land_s": 91.65249276946601
+    },
+    {
+      "scenario": {
+        "altitude_m": 102.70842525184278,
+        "distance_m": 193.47375624441432,
+        "bearing_deg": -130.76494144467065,
+        "wind_speed_mps": 2.513421905479111,
+        "wind_direction_deg": 293.4922600782164
+      },
+      "reachable": true,
+      "reason": "ok",
+      "risk": 0.0,
+      "desired_risk": 0.0,
+      "risk_reduction": 0.0,
+      "distance_to_desired_m": 224.55863463817076,
+      "reach_margin_mps": 3.3049532313281422,
+      "time_to_land_s": 90.8924117272945
+    },
+    {
+      "scenario": {
+        "altitude_m": 50.99898327792274,
+        "distance_m": 167.98467270128072,
+        "bearing_deg": 105.48851691529228,
+        "wind_speed_mps": 3.0780214969332507,
+        "wind_direction_deg": 261.30579139839136
+      },
+      "reachable": true,
+      "reason": "ok",
+      "risk": 0.0,
+      "desired_risk": 0.0,
+      "risk_reduction": 0.0,
+      "distance_to_desired_m": 301.16640375667544,
+      "reach_margin_mps": 3.9033353261260975,
+      "time_to_land_s": 45.13184360878119
+    },
+    {
+      "scenario": {
+        "altitude_m": 65.84964378880008,
+        "distance_m": 107.7929607189742,
+        "bearing_deg": -49.274297801873416,
+        "wind_speed_mps": 1.0764361654028791,
+        "wind_direction_deg": 124.58211808049224
+      },
+      "reachable": true,
+      "reason": "ok",
+      "risk": 0.0,
+      "desired_risk": 0.0,
+      "risk_reduction": 0.0,
+      "distance_to_desired_m": 19.915794363620165,
+      "reach_margin_mps": 0.7138974910126898,
+      "time_to_land_s": 58.27402105203547
+    },
+    {
+      "scenario": {
+        "altitude_m": 116.36868429875703,
+        "distance_m": 160.26658046555693,
+        "bearing_deg": -57.57549572849766,
+        "wind_speed_mps": 1.6291477188527117,
+        "wind_direction_deg": 342.734216654708
+      },
+      "reachable": true,
+      "reason": "ok",
+      "risk": 0.0,
+      "desired_risk": 0.0,
+      "risk_reduction": 0.0,
+      "distance_to_desired_m": 126.84141784516638,
+      "reach_margin_mps": 2.929714136080216,
+      "time_to_land_s": 102.9811365475726
+    },
+    {
+      "scenario": {
+        "altitude_m": 81.11347467529794,
+        "distance_m": 217.25526512328253,
+        "bearing_deg": 5.588160878257554,
+        "wind_speed_mps": 3.1269967741573437,
+        "wind_direction_deg": 322.7545885377603
+      },
+      "reachable": true,
+      "reason": "ok",
+      "risk": 0.0,
+      "desired_risk": 0.0,
+      "risk_reduction": 0.0,
+      "distance_to_desired_m": 150.69744125993984,
+      "reach_margin_mps": 3.516948349553677,
+      "time_to_land_s": 71.78183599583889
+    },
+    {
+      "scenario": {
+        "altitude_m": 101.99371927505277,
+        "distance_m": 161.29140093939515,
+        "bearing_deg": -26.406178618946996,
+        "wind_speed_mps": 5.269127156509683,
+        "wind_direction_deg": 148.19261396647983
+      },
+      "reachable": true,
+      "reason": "ok",
+      "risk": 0.0,
+      "desired_risk": 0.0,
+      "risk_reduction": 0.0,
+      "distance_to_desired_m": 611.5456752876811,
+      "reach_margin_mps": 3.6672009088676685,
+      "time_to_land_s": 90.2599285619936
+    },
+    {
+      "scenario": {
+        "altitude_m": 114.59317033179272,
+        "distance_m": 89.6201492970606,
+        "bearing_deg": -25.201129715581317,
+        "wind_speed_mps": 3.117088919267154,
+        "wind_direction_deg": 342.3377504094659
+      },
+      "reachable": true,
+      "reason": "ok",
+      "risk": 0.0,
+      "desired_risk": 0.0,
+      "risk_reduction": 0.0,
+      "distance_to_desired_m": 253.17659755512753,
+      "reach_margin_mps": 3.7099754542158165,
+      "time_to_land_s": 101.4098852493741
+    },
+    {
+      "scenario": {
+        "altitude_m": 67.56994726653306,
+        "distance_m": 192.84548061669523,
+        "bearing_deg": 63.52963199949363,
+        "wind_speed_mps": 4.302515425686738,
+        "wind_direction_deg": 226.66398582247328
+      },
+      "reachable": true,
+      "reason": "ok",
+      "risk": 0.0,
+      "desired_risk": 0.0,
+      "risk_reduction": 0.0,
+      "distance_to_desired_m": 446.50223118053316,
+      "reach_margin_mps": 3.6024461392130824,
+      "time_to_land_s": 59.79641351020626
+    },
+    {
+      "scenario": {
+        "altitude_m": 118.00924959231061,
+        "distance_m": 126.57540428958548,
+        "bearing_deg": -36.6207985154266,
+        "wind_speed_mps": 1.2174705132810972,
+        "wind_direction_deg": 18.253459898017383
+      },
+      "reachable": true,
+      "reason": "ok",
+      "risk": 0.0,
+      "desired_risk": 0.0,
+      "risk_reduction": 0.0,
+      "distance_to_desired_m": 138.02917075590318,
+      "reach_margin_mps": 2.9549858326330813,
+      "time_to_land_s": 104.43296424098286
+    },
+    {
+      "scenario": {
+        "altitude_m": 64.90357364827375,
+        "distance_m": 208.16501559734715,
+        "bearing_deg": 122.46077417702026,
+        "wind_speed_mps": 0.6744344489554739,
+        "wind_direction_deg": 217.3604491140715
+      },
+      "reachable": true,
+      "reason": "ok",
+      "risk": 0.0,
+      "desired_risk": 0.0,
+      "risk_reduction": 0.0,
+      "distance_to_desired_m": 0.0,
+      "reach_margin_mps": 0.22733255519090179,
+      "time_to_land_s": 57.43679083918031
+    },
+    {
+      "scenario": {
+        "altitude_m": 83.54375464227374,
+        "distance_m": 163.25588186835898,
+        "bearing_deg": 57.33900237926278,
+        "wind_speed_mps": 1.8399569453332314,
+        "wind_direction_deg": 346.0863041051245
+      },
+      "reachable": true,
+      "reason": "ok",
+      "risk": 0.0,
+      "desired_risk": 0.0,
+      "risk_reduction": 0.0,
+      "distance_to_desired_m": 151.3515255299548,
+      "reach_margin_mps": 3.18843343233629,
+      "time_to_land_s": 73.93252623210066
+    },
+    {
+      "scenario": {
+        "altitude_m": 82.60880245427875,
+        "distance_m": 167.93411968108694,
+        "bearing_deg": 48.68142620389676,
+        "wind_speed_mps": 1.103336379058147,
+        "wind_direction_deg": 22.27155053629469
+      },
+      "reachable": true,
+      "reason": "ok",
+      "risk": 0.0,
+      "desired_risk": 0.0,
+      "risk_reduction": 0.0,
+      "distance_to_desired_m": 0.0,
+      "reach_margin_mps": 2.57205640878231,
+      "time_to_land_s": 73.10513491529093
+    },
+    {
+      "scenario": {
+        "altitude_m": 78.80617764485825,
+        "distance_m": 186.9642123813856,
+        "bearing_deg": 113.47984378503781,
+        "wind_speed_mps": 4.37993549401239,
+        "wind_direction_deg": 40.75378290908028
+      },
+      "reachable": true,
+      "reason": "ok",
+      "risk": 0.0,
+      "desired_risk": 0.0,
+      "risk_reduction": 0.0,
+      "distance_to_desired_m": 323.37843652350057,
+      "reach_margin_mps": 3.7317423101093703,
+      "time_to_land_s": 69.73998021668872
+    },
+    {
+      "scenario": {
+        "altitude_m": 113.93484030717318,
+        "distance_m": 192.28512091961971,
+        "bearing_deg": 135.96889199383207,
+        "wind_speed_mps": 3.1398249178510635,
+        "wind_direction_deg": 329.6287566362637
+      },
+      "reachable": true,
+      "reason": "ok",
+      "risk": 0.0,
+      "desired_risk": 0.0,
+      "risk_reduction": 0.0,
+      "distance_to_desired_m": 500.0383088796909,
+      "reach_margin_mps": 3.812625570734216,
+      "time_to_land_s": 100.82729230723291
+    },
+    {
+      "scenario": {
+        "altitude_m": 53.2656566567721,
+        "distance_m": 84.24043675042428,
+        "bearing_deg": -172.72239359178712,
+        "wind_speed_mps": 1.5166120677147383,
+        "wind_direction_deg": 89.48511835523384
+      },
+      "reachable": true,
+      "reason": "ok",
+      "risk": 0.0,
+      "desired_risk": 0.0,
+      "risk_reduction": 0.0,
+      "distance_to_desired_m": 120.7195461321993,
+      "reach_margin_mps": 2.923102335461093,
+      "time_to_land_s": 47.137749253780626
+    },
+    {
+      "scenario": {
+        "altitude_m": 63.12523340491766,
+        "distance_m": 159.38781457395538,
+        "bearing_deg": -165.96509722810367,
+        "wind_speed_mps": 3.5423272070091105,
+        "wind_direction_deg": 59.76401509699813
+      },
+      "reachable": true,
+      "reason": "ok",
+      "risk": 0.0,
+      "desired_risk": 0.0,
+      "risk_reduction": 0.0,
+      "distance_to_desired_m": 323.4296834827214,
+      "reach_margin_mps": 3.779382462760857,
+      "time_to_land_s": 55.86303841143156
+    },
+    {
+      "scenario": {
+        "altitude_m": 97.45115959971166,
+        "distance_m": 82.95054962214475,
+        "bearing_deg": -68.19472906084984,
+        "wind_speed_mps": 5.630047721187683,
+        "wind_direction_deg": 193.82269675580807
+      },
+      "reachable": true,
+      "reason": "ok",
+      "risk": 0.0,
+      "desired_risk": 0.0,
+      "risk_reduction": 0.0,
+      "distance_to_desired_m": 534.7874916280597,
+      "reach_margin_mps": 3.5249198588483783,
+      "time_to_land_s": 86.23996424753246
+    },
+    {
+      "scenario": {
+        "altitude_m": 106.81111819227255,
+        "distance_m": 172.1236514256416,
+        "bearing_deg": 39.87028282086945,
+        "wind_speed_mps": 1.1475160805093843,
+        "wind_direction_deg": 206.78210937281017
+      },
+      "reachable": true,
+      "reason": "ok",
+      "risk": 0.0,
+      "desired_risk": 0.0,
+      "risk_reduction": 0.0,
+      "distance_to_desired_m": 26.26968832968086,
+      "reach_margin_mps": 0.8205956836637633,
+      "time_to_land_s": 94.52311344448898
+    },
+    {
+      "scenario": {
+        "altitude_m": 52.77804929213,
+        "distance_m": 192.23301671286225,
+        "bearing_deg": 165.6255301294234,
+        "wind_speed_mps": 5.124054428051071,
+        "wind_direction_deg": 18.255472547782034
+      },
+      "reachable": true,
+      "reason": "ok",
+      "risk": 0.0,
+      "desired_risk": 0.0,
+      "risk_reduction": 0.0,
+      "distance_to_desired_m": 422.3638771951197,
+      "reach_margin_mps": 3.7992303194175,
+      "time_to_land_s": 46.70623831161947
+    },
+    {
+      "scenario": {
+        "altitude_m": 73.7062058366153,
+        "distance_m": 124.52044770071952,
+        "bearing_deg": -139.4218829797668,
+        "wind_speed_mps": 3.7596709159687265,
+        "wind_direction_deg": 287.08494313188
+      },
+      "reachable": true,
+      "reason": "ok",
+      "risk": 0.0,
+      "desired_risk": 0.0,
+      "risk_reduction": 0.0,
+      "distance_to_desired_m": 222.5658676307416,
+      "reach_margin_mps": 3.8028677558804063,
+      "time_to_land_s": 65.2267308288631
+    },
+    {
+      "scenario": {
+        "altitude_m": 71.96050304015708,
+        "distance_m": 200.79329288862286,
+        "bearing_deg": 106.96568862460668,
+        "wind_speed_mps": 0.7748276488459487,
+        "wind_direction_deg": 276.0692964257359
+      },
+      "reachable": true,
+      "reason": "ok",
+      "risk": 0.0,
+      "desired_risk": 0.0,
+      "risk_reduction": 0.0,
+      "distance_to_desired_m": 14.6551759504252,
+      "reach_margin_mps": 0.2531114946511446,
+      "time_to_land_s": 63.681861097484145
+    },
+    {
+      "scenario": {
+        "altitude_m": 111.78345039313427,
+        "distance_m": 107.61955977644452,
+        "bearing_deg": 26.51082461946831,
+        "wind_speed_mps": 3.832499796132617,
+        "wind_direction_deg": 219.36033269733593
+      },
+      "reachable": true,
+      "reason": "ok",
+      "risk": 0.0,
+      "desired_risk": 0.0,
+      "risk_reduction": 0.0,
+      "distance_to_desired_m": 461.95127081686974,
+      "reach_margin_mps": 3.302906331889657,
+      "time_to_land_s": 98.92340742755246
+    },
+    {
+      "scenario": {
+        "altitude_m": 56.73719743396305,
+        "distance_m": 172.56680454209288,
+        "bearing_deg": 47.50370088462671,
+        "wind_speed_mps": 4.943312934012086,
+        "wind_direction_deg": 289.2645716869182
+      },
+      "reachable": true,
+      "reason": "ok",
+      "risk": 0.0,
+      "desired_risk": 0.0,
+      "risk_reduction": 0.0,
+      "distance_to_desired_m": 355.5922511596328,
+      "reach_margin_mps": 3.7199628048343087,
+      "time_to_land_s": 50.209909233595624
+    },
+    {
+      "scenario": {
+        "altitude_m": 72.9017745552859,
+        "distance_m": 181.08662660971754,
+        "bearing_deg": 132.21841952604814,
+        "wind_speed_mps": 5.357686549144737,
+        "wind_direction_deg": 58.144437700919724
+      },
+      "reachable": true,
+      "reason": "ok",
+      "risk": 0.0,
+      "desired_risk": 0.0,
+      "risk_reduction": 0.0,
+      "distance_to_desired_m": 330.72355358929116,
+      "reach_margin_mps": 3.6896244317912554,
+      "time_to_land_s": 64.51484473919106
+    },
+    {
+      "scenario": {
+        "altitude_m": 51.86916450603992,
+        "distance_m": 171.113042079112,
+        "bearing_deg": -102.7165418122452,
+        "wind_speed_mps": 3.3822583456024153,
+        "wind_direction_deg": 340.12963073046274
+      },
+      "reachable": true,
+      "reason": "ok",
+      "risk": 0.0,
+      "desired_risk": 0.0,
+      "risk_reduction": 0.0,
+      "distance_to_desired_m": 210.8124114120479,
+      "reach_margin_mps": 3.8422046730138804,
+      "time_to_land_s": 45.901915492070735
+    },
+    {
+      "scenario": {
+        "altitude_m": 76.55237369767974,
+        "distance_m": 115.38843705380295,
+        "bearing_deg": -15.656382013727011,
+        "wind_speed_mps": 3.943463479624402,
+        "wind_direction_deg": 36.39562842767716
+      },
+      "reachable": true,
+      "reason": "ok",
+      "risk": 0.0,
+      "desired_risk": 0.0,
+      "risk_reduction": 0.0,
+      "distance_to_desired_m": 208.23147062194664,
+      "reach_margin_mps": 3.717701085706125,
+      "time_to_land_s": 67.74546344927411
+    },
+    {
+      "scenario": {
+        "altitude_m": 76.64093344503799,
+        "distance_m": 98.72096643739317,
+        "bearing_deg": 58.48063978113137,
+        "wind_speed_mps": 4.983315193579104,
+        "wind_direction_deg": 135.66736130716168
+      },
+      "reachable": true,
+      "reason": "ok",
+      "risk": 0.0,
+      "desired_risk": 0.0,
+      "risk_reduction": 0.0,
+      "distance_to_desired_m": 346.2639171487318,
+      "reach_margin_mps": 3.3732761552395165,
+      "time_to_land_s": 67.82383490711327
+    }
+  ]
+}

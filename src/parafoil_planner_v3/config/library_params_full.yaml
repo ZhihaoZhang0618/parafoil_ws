@@ -35,6 +35,11 @@ parafoil_planner_v3:
         lsq_w_dynamics: 1.0
         lsq_w_boundary: 10.0
         lsq_w_ineq: 10.0
+        u_ref_min: 0.001
+        u_ref_max: 1.0
+        lsq_x_scale: "jac"
+        lsq_diag_grad_max: 50
+        lsq_x0_bound_eps: 0.001
         # Shape constraints (post-check)
         shape_enforce: true
         shape_turn_eps_deg: 3.0

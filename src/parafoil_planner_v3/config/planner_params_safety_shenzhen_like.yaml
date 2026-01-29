@@ -1,0 +1,99 @@
+parafoil_planner_v3:
+  ros__parameters:
+    # Synthetic "Shenzhen-like" safety scenario (NOT a real map).
+
+    # === Core ===
+    planner_rate_hz: 1.0
+    use_library: false
+    library_path: ""
+
+    # === Library (kept for compatibility; unused when use_library=false) ===
+    library:
+      enable_gpm_fine_tuning: true
+      fine_tuning_trigger_m: 25.0
+
+    # === GPM (online optimization) ===
+    gpm:
+      num_nodes: 12
+      scheme: "LGL"
+      tf_guess: 30.0
+      max_constraint_violation_for_accept: 0.5
+
+    # === Solver guardrails ===
+    solver:
+      max_solve_time_s: 0.25
+
+    # === Environment constraints ===
+    constraints:
+      terrain_type: "flat"
+      terrain_height0_m: 0.0
+      terrain_clearance_m: 0.0
+      no_fly_circles: "[]"
+      no_fly_polygons: "[]"
+      no_fly_polygons_file: "/home/aims/parafoil_ws/src/parafoil_planner_v3/config/shenzhen_like_no_fly_polygons.json"
+
+    # === Wind input ===
+    wind:
+      use_topic: true
+      default_ned: [0.0, 4.0, 0.0]
+      input_frame: "ned"
+      convention: "to"
+      timeout_s: 2.0
+      max_speed_mps: 0.0
+
+    # === Headwind / aimpoint planning ===
+    headwind:
+      enable: true
+      wind_ratio_trigger: 0.8
+      max_aim_offset_m: 200.0
+      min_progress_mps: 0.0
+      aimpoint_nofly_projection: true
+
+    # === Target & update policy ===
+    target:
+      position_ned: [150.0, 0.0, 0.0]
+      auto_mode: "manual"
+      update_policy:
+        enabled: true
+        enable_hysteresis: true
+        score_hysteresis: 0.5
+        dist_hysteresis_m: 20.0
+        cruise_allow_update: true
+        approach_allow_update: "emergency_only"
+        flare_lock: true
+        emergency_margin_mps: -0.5
+        emergency_cooldown_s: 2.0
+        approach_significant_factor: 2.0
+        smooth_transition: false
+        smooth_rate_mps: 5.0
+
+    # === Safety-first landing site selection ===
+    safety:
+      enable: true
+      selector:
+        grid_resolution_m: 15.0
+        search_radius_m: 0.0
+        max_candidates: 1000
+        random_seed: 0
+        w_risk: 5.0
+        w_distance: 1.0
+        w_reach_margin: 1.0
+        w_energy: 0.5
+        nofly_buffer_m: 20.0
+        nofly_weight: 5.0
+        snap_to_terrain: true
+      reachability:
+        brake: 0.2
+        min_time_s: 2.0
+        max_time_s: 200.0
+        wind_margin_mps: 0.2
+        wind_uncertainty_mps: 0.5
+        gust_margin_mps: 0.5
+        min_altitude_m: 5.0
+        enforce_circle: true
+      risk:
+        grid_file: "/home/aims/parafoil_ws/src/parafoil_planner_v3/config/shenzhen_like_risk_grid_400x400.npz"
+        grid_weight: 1.0
+        clip_min: 0.0
+        clip_max: 1.0
+        oob_value: 1.0

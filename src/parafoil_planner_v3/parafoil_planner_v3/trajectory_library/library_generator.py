@@ -18,6 +18,7 @@ from parafoil_planner_v3.types import Control, Scenario, State, Target, Trajecto
 
 from .library_manager import LibraryTrajectory, TrajectoryLibrary
 from .trajectory_metrics import compute_trajectory_metrics
+from .wind_metrics import compute_wind_drift_metrics
 
 
 @dataclass(frozen=True)
@@ -61,6 +62,15 @@ class GPMGenerationConfig:
     lsq_w_dynamics: float = 1.0
     lsq_w_boundary: float = 10.0
     lsq_w_ineq: float = 10.0
+    lsq_nudge_eps_abs: float = 1e-4
+    lsq_nudge_eps_rel: float = 1e-6
+    lsq_diag: str = "on_warn"  # none | on_warn | always
+    lsq_diag_max_reports: int = 20
+    u_ref_min: float = 0.0
+    u_ref_max: float = 1.0
+    lsq_x_scale: str = "jac"  # "jac" or "auto"
+    lsq_diag_grad_max: int = 50
+    lsq_x0_bound_eps: float = 1e-3
 
     # Shape constraints (post-check)
     shape_enforce: bool = True
@@ -77,13 +87,34 @@ class GPMGenerationConfig:
     spiral_min_turns: float = 1.0
     spiral_min_turn_fraction: float = 0.9
 
+    # ------------------------------------------------------------------
+    # Strong-wind library extensions (optional; defaults keep old behavior)
+    # ------------------------------------------------------------------
+    # Enable quick reachability pruning for offline generation.
+    reachability_filter_enable: bool = False
+    # Margin for reachability checks (m/s). Used as a *lenient* buffer: allow <= V_air_max + margin.
+    reachability_margin_mps: float = 0.2
+    # Minimum progress along target direction to consider reachable (m/s).
+    reachability_min_progress_mps: float = 0.0
+
+    # If wind_ratio >= trigger, allow wind-aware initialization for x0 (yaw/velocity direction).
+    strong_wind_ratio_trigger: float = 0.8
+    # How to set initial heading in strong wind: none|req_air|upwind
+    strong_wind_init_yaw_mode: str = "none"
+
 
 def _scenario_to_wind_I(s: Scenario) -> np.ndarray:
     ang = float(np.deg2rad(s.wind_direction_deg))
     return np.array([s.wind_speed * np.cos(ang), s.wind_speed * np.sin(ang), 0.0], dtype=float)
 
 
-def _scenario_initial_state_target_centered(s: Scenario, polar: PolarTable, brake_sym: float) -> Tuple[np.ndarray, np.ndarray, float]:
+def _scenario_initial_state_target_centered(
+    s: Scenario,
+    polar: PolarTable,
+    brake_sym: float,
+    *,
+    yaw0_rad: float | None = None,
+) -> Tuple[np.ndarray, np.ndarray, float]:
     """
     Returns:
       x0 (13,), p_target (3,), tf_guess
@@ -100,9 +131,11 @@ def _scenario_initial_state_target_centered(s: Scenario, polar: PolarTable, brak
         dtype=float,
     )
     V, sink = polar.interpolate(brake_sym)
-    # Initial velocity points toward target (state->target bearing).
-    v0 = np.array([V * np.cos(bearing), V * np.sin(bearing), sink], dtype=float)
-    q0 = yaw_only_quat_wxyz(bearing)
+    # Strong-wind initialization may choose a yaw not aligned with state->target bearing.
+    yaw = float(bearing if yaw0_rad is None else yaw0_rad)
+    # Initial velocity magnitude matches polar V; direction follows yaw (ground-velocity initial guess).
+    v0 = np.array([V * np.cos(yaw), V * np.sin(yaw), sink], dtype=float)
+    q0 = yaw_only_quat_wxyz(yaw)
     x0 = State(p_I=p0, v_I=v0, q_IB=q0, w_B=np.zeros(3), t=0.0).to_vector()
 
     p_target = np.array([0.0, 0.0, 0.0], dtype=float)
@@ -179,6 +212,54 @@ def _interp_array(t_grid: np.ndarray, Y: np.ndarray, t: float) -> np.ndarray:
 
 def _pack_decision(X: np.ndarray, U: np.ndarray, tf: float) -> np.ndarray:
     return np.concatenate([np.asarray(X, dtype=float).reshape(-1), np.asarray(U, dtype=float).reshape(-1), np.array([tf], dtype=float)])
+
+
+def _nudge_inside_bounds(
+    z0: np.ndarray,
+    lb: np.ndarray,
+    ub: np.ndarray,
+    *,
+    start_idx: int,
+    eps_abs: float = 1e-4,
+    eps_rel: float = 1e-6,
+) -> np.ndarray:
+    """Move any z0 elements sitting on finite bounds slightly inside to avoid lsq numerical issues."""
+    z0 = np.asarray(z0, dtype=float).copy()
+    lb = np.asarray(lb, dtype=float)
+    ub = np.asarray(ub, dtype=float)
+    n = int(z0.shape[0])
+    for i in range(int(start_idx), n):
+        lo = float(lb[i])
+        hi = float(ub[i])
+        lo_f = np.isfinite(lo)
+        hi_f = np.isfinite(hi)
+        if not (lo_f or hi_f):
+            continue
+        if not np.isfinite(z0[i]):
+            if lo_f and hi_f:
+                z0[i] = 0.5 * (lo + hi)
+            elif lo_f:
+                z0[i] = lo + max(float(eps_abs), float(eps_rel) * max(1.0, abs(lo)))
+            else:
+                z0[i] = hi - max(float(eps_abs), float(eps_rel) * max(1.0, abs(hi)))
+            continue
+        base_eps = max(float(eps_abs), float(eps_rel) * max(1.0, abs(lo), abs(hi)))
+        if lo_f and hi_f:
+            width = hi - lo
+            if width <= 0.0:
+                continue
+            local_eps = min(base_eps, 0.49 * width)
+            if z0[i] <= lo + local_eps:
+                z0[i] = lo + local_eps
+            elif z0[i] >= hi - local_eps:
+                z0[i] = hi - local_eps
+        elif lo_f:
+            if z0[i] <= lo + base_eps:
+                z0[i] = lo + base_eps
+        else:
+            if z0[i] >= hi - base_eps:
+                z0[i] = hi - base_eps
+    return z0
 
 
 def _warm_start_from_template(gpm: GPMCollocation, template: Trajectory, U_ref: np.ndarray) -> np.ndarray:
@@ -422,6 +503,7 @@ def _init_gpm_worker(gpm_cfg: GPMGenerationConfig) -> None:
     _GPM_WORKER["solver"] = solver
     _GPM_WORKER["polar"] = polar
     _GPM_WORKER["gpm_cfg"] = gpm_cfg
+    _GPM_WORKER["lsq_diag_count"] = 0
 
 
 def _solve_gpm_task(task: Tuple[Scenario, TrajectoryType]) -> Optional[LibraryTrajectory]:
@@ -451,8 +533,111 @@ def _solve_gpm_task(task: Tuple[Scenario, TrajectoryType]) -> Optional[LibraryTr
         brake_sym = float(gpm_cfg.brake_fallback)
     brake_sym = float(np.clip(brake_sym, float(gpm_cfg.brake_min), float(gpm_cfg.brake_max)))
 
-    x0, p_target, tf_guess = _scenario_initial_state_target_centered(scenario, polar, brake_sym=brake_sym)
     wind_I = _scenario_to_wind_I(scenario)
+    wind_xy = np.asarray(wind_I[:2], dtype=float)
+    wind_speed = float(np.linalg.norm(wind_xy))
+    V_air_max, _ = polar.interpolate(0.0)
+    wind_ratio = float(wind_speed / max(float(V_air_max), 1e-6))
+
+    # ------------------------------------------------------------------
+    # Optional: quick reachability pruning (skip tasks that match planner's
+    # "unreachable_wind" class or obviously exceed max airspeed).
+    # ------------------------------------------------------------------
+    if bool(getattr(gpm_cfg, "reachability_filter_enable", False)):
+        # Target direction is state->target bearing.
+        d_hat = np.array([np.cos(bearing), np.sin(bearing)], dtype=float)
+        v_g_along_max = float(V_air_max) + float(np.dot(wind_xy, d_hat))
+        if v_g_along_max <= float(getattr(gpm_cfg, "reachability_min_progress_mps", 0.0)):
+            return None
+
+        # Required ground velocity to reach target (target is at origin in library frame).
+        d_xy = np.array(
+            [float(scenario.target_distance_m) * np.cos(bearing), float(scenario.target_distance_m) * np.sin(bearing)],
+            dtype=float,
+        )
+        margin = float(max(getattr(gpm_cfg, "reachability_margin_mps", 0.0), 0.0))
+
+        # Conservative-but-realistic check: does there exist a *constant* brake value (thus fixed (V,sink))
+        # that makes it possible to reach the target at touchdown time?
+        best_slack = float("-inf")
+        best_v_req_air: np.ndarray | None = None
+        # Use the polar grid; restrict to configured brake bounds.
+        b_lo = float(getattr(gpm_cfg, "brake_min", 0.0))
+        b_hi = float(getattr(gpm_cfg, "brake_max", 1.0))
+        for b in np.asarray(polar.brake, dtype=float).reshape(-1):
+            if b < b_lo - 1e-9 or b > b_hi + 1e-9:
+                continue
+            Vb, sinkb = polar.interpolate(float(b))
+            if float(sinkb) <= 1e-6:
+                continue
+            tgo = float(max(float(scenario.initial_altitude_m) / float(sinkb), 0.0))
+            if tgo <= 1e-6:
+                continue
+            v_req_ground = d_xy / tgo
+            v_req_air = v_req_ground - wind_xy
+            req = float(np.linalg.norm(v_req_air))
+            slack = float(Vb + margin - req)
+            if slack > best_slack:
+                best_slack = slack
+                best_v_req_air = v_req_air
+
+        # No brake setting can satisfy the coupled (V,sink) requirements.
+        if best_slack <= 0.0 or best_v_req_air is None:
+            return None
+
+    # ------------------------------------------------------------------
+    # Optional: strong-wind initial yaw selection for x0 (improves solve
+    # stability for wind_ratio~1 and above).
+    # ------------------------------------------------------------------
+    yaw0 = None
+    mode = str(getattr(gpm_cfg, "strong_wind_init_yaw_mode", "none")).strip().lower()
+    trig = float(getattr(gpm_cfg, "strong_wind_ratio_trigger", 0.0))
+    if mode not in {"", "none"} and (trig <= 0.0 or wind_ratio >= trig):
+        if mode == "upwind":
+            if wind_speed > 1e-6:
+                yaw0 = float(np.arctan2(-wind_xy[1], -wind_xy[0]))
+        elif mode in {"req_air", "required_air"}:
+            # Prefer the best brake-feasible v_req_air from reachability pruning when enabled.
+            v_req_air = None
+            if bool(getattr(gpm_cfg, "reachability_filter_enable", False)):
+                # Recompute in-place (cheap: polar grid is tiny) to avoid threading/sharing issues.
+                b_lo = float(getattr(gpm_cfg, "brake_min", 0.0))
+                b_hi = float(getattr(gpm_cfg, "brake_max", 1.0))
+                best_slack = float("-inf")
+                for b in np.asarray(polar.brake, dtype=float).reshape(-1):
+                    if b < b_lo - 1e-9 or b > b_hi + 1e-9:
+                        continue
+                    Vb, sinkb = polar.interpolate(float(b))
+                    if float(sinkb) <= 1e-6:
+                        continue
+                    tgo = float(max(float(scenario.initial_altitude_m) / float(sinkb), 0.0))
+                    if tgo <= 1e-6:
+                        continue
+                    d_xy = np.array(
+                        [float(scenario.target_distance_m) * np.cos(bearing), float(scenario.target_distance_m) * np.sin(bearing)],
+                        dtype=float,
+                    )
+                    v_req_air_b = (d_xy / tgo) - wind_xy
+                    req = float(np.linalg.norm(v_req_air_b))
+                    slack = float(Vb - req)
+                    if slack > best_slack:
+                        best_slack = slack
+                        v_req_air = v_req_air_b
+            else:
+                # Fallback: use baseline brake_sym.
+                _, sink = polar.interpolate(brake_sym)
+                if float(sink) > 1e-6:
+                    tgo = float(max(float(scenario.initial_altitude_m) / float(sink), 1e-6))
+                    d_xy = np.array(
+                        [float(scenario.target_distance_m) * np.cos(bearing), float(scenario.target_distance_m) * np.sin(bearing)],
+                        dtype=float,
+                    )
+                    v_req_air = (d_xy / tgo) - wind_xy
+
+            if v_req_air is not None and float(np.linalg.norm(v_req_air)) > 1e-6:
+                yaw0 = float(np.arctan2(v_req_air[1], v_req_air[0]))
+
+    x0, p_target, tf_guess = _scenario_initial_state_target_centered(scenario, polar, brake_sym=brake_sym, yaw0_rad=yaw0)
 
     dynamics_mode = str(getattr(gpm_cfg, "dynamics_mode", "simplified")).strip().lower()
     if dynamics_mode in {"mixed", "hybrid"}:
@@ -493,6 +678,12 @@ def _solve_gpm_task(task: Tuple[Scenario, TrajectoryType]) -> Optional[LibraryTr
         s_turn_cycles=float(gpm_cfg.s_turn_cycles),
         spiral_sign=float(gpm_cfg.spiral_delta_a_sign),
     )
+    u_ref_min = float(getattr(gpm_cfg, "u_ref_min", 0.0))
+    u_ref_max = float(getattr(gpm_cfg, "u_ref_max", 1.0))
+    u_ref_min = float(np.clip(u_ref_min, 0.0, 1.0))
+    u_ref_max = float(np.clip(u_ref_max, u_ref_min, 1.0))
+    if u_ref_min > 0.0 or u_ref_max < 1.0:
+        U_ref = np.clip(U_ref, u_ref_min, u_ref_max)
 
     if dyn_tag == "6dof":
         # Warm-start using a closed-loop rollout tracking a geometric template.
@@ -529,11 +720,20 @@ def _solve_gpm_task(task: Tuple[Scenario, TrajectoryType]) -> Optional[LibraryTr
         ub = np.array([np.inf if b[1] is None else float(b[1]) for b in b_list], dtype=float)
 
         # Keep initial state tightly bounded (least_squares requires strict lb < ub).
-        eps_fix = 1e-9
+        eps_fix = float(getattr(gpm_cfg, "lsq_x0_bound_eps", 1e-3))
+        eps_fix = max(1e-9, eps_fix)
         for i in range(solver.n_x):
             xi = float(x0[i])
             lb[i] = xi - eps_fix
             ub[i] = xi + eps_fix
+        z0 = _nudge_inside_bounds(
+            z0,
+            lb,
+            ub,
+            start_idx=solver.n_x,
+            eps_abs=float(getattr(gpm_cfg, "lsq_nudge_eps_abs", 1e-4)),
+            eps_rel=float(getattr(gpm_cfg, "lsq_nudge_eps_rel", 1e-6)),
+        )
 
         w_dyn = float(gpm_cfg.lsq_w_dynamics)
         w_bnd = float(gpm_cfg.lsq_w_boundary)
@@ -559,13 +759,177 @@ def _solve_gpm_task(task: Tuple[Scenario, TrajectoryType]) -> Optional[LibraryTr
             ]
             return np.concatenate(parts, axis=0)
 
+        diag_mode = str(getattr(gpm_cfg, "lsq_diag", "none")).strip().lower()
+        diag_max = int(getattr(gpm_cfg, "lsq_diag_max_reports", 20))
+        diag_eps = float(max(getattr(gpm_cfg, "lsq_nudge_eps_abs", 1e-4), 1e-9))
+
+        def _lsq_diag(reason: str, warn_list: Optional[List[str]] = None) -> None:
+            if diag_mode == "none":
+                return
+            if diag_mode == "on_warn" and reason != "warn":
+                return
+            count = int(_GPM_WORKER.get("lsq_diag_count", 0))
+            if diag_max > 0 and count >= diag_max:
+                return
+            _GPM_WORKER["lsq_diag_count"] = count + 1
+
+            nX = int(solver.n_x * gpm.N)
+            nU = int(solver.n_u * gpm.N)
+            idx_u = slice(nX, nX + nU)
+            idx_tf = nX + nU
+            idx_x0 = slice(0, solver.n_x)
+
+            def _near_counts(z: np.ndarray, lo: np.ndarray, hi: np.ndarray, sl) -> Tuple[int, int]:
+                z_s = z[sl]
+                lo_s = lo[sl]
+                hi_s = hi[sl]
+                near_lo = np.isfinite(lo_s) & ((z_s - lo_s) <= diag_eps)
+                near_hi = np.isfinite(hi_s) & ((hi_s - z_s) <= diag_eps)
+                return int(np.count_nonzero(near_lo)), int(np.count_nonzero(near_hi))
+
+            near_u = _near_counts(z0, lb, ub, idx_u)
+            near_tf = _near_counts(z0, lb, ub, idx_tf)
+            near_x0 = _near_counts(z0, lb, ub, idx_x0)
+
+            X0, U0, tf0 = solver._unpack(z0)
+            r_info = "residual=unavailable"
+            try:
+                r0 = residual(z0)
+                r_finite = np.isfinite(r0)
+                r_finite_count = int(np.count_nonzero(r_finite))
+                if r_finite_count:
+                    r_max = float(np.max(np.abs(r0[r_finite])))
+                    r_max_s = f"{r_max:.3e}"
+                else:
+                    r_max_s = "nan"
+                r_info = (
+                    f"residual_finite={r_finite_count}/{r0.size} "
+                    f"nan={int(np.count_nonzero(np.isnan(r0)))} inf={int(np.count_nonzero(np.isinf(r0)))} "
+                    f"r_max={r_max_s}"
+                )
+            except Exception as exc:  # pragma: no cover - diagnostics only
+                r_info = f"residual_error={exc!r}"
+
+            warn_msg = ""
+            if warn_list:
+                uniq = []
+                for w in warn_list:
+                    if w not in uniq:
+                        uniq.append(w)
+                warn_msg = f" warnings={len(warn_list)} unique={len(uniq)} first={uniq[:2]}"
+
+            # Extra diagnostics: approximate gradient for near-bound variables and compute CL scaling v.
+            v_info = ""
+            try:
+                diag_grad_max = int(getattr(gpm_cfg, "lsq_diag_grad_max", 50))
+                finite_bounds = np.isfinite(lb) | np.isfinite(ub)
+                near_bounds = finite_bounds & (
+                    (np.isfinite(lb) & ((z0 - lb) <= diag_eps)) |
+                    (np.isfinite(ub) & ((ub - z0) <= diag_eps))
+                )
+                near_idx = np.where(near_bounds)[0]
+                if diag_grad_max > 0 and near_idx.size > diag_grad_max:
+                    near_idx = near_idx[:diag_grad_max]
+
+                if near_idx.size:
+                    def cost_fn(z: np.ndarray) -> float:
+                        r = residual(z)
+                        return 0.5 * float(np.dot(r, r))
+
+                    base_cost = cost_fn(z0)
+                    g_est = np.zeros_like(near_idx, dtype=float)
+                    for j, i in enumerate(near_idx):
+                        lo = float(lb[i])
+                        hi = float(ub[i])
+                        x = float(z0[i])
+                        step = float(max(1e-6, diag_eps))
+                        # Keep step inside bounds.
+                        if np.isfinite(hi):
+                            step = min(step, 0.5 * max(hi - x, 0.0))
+                        if np.isfinite(lo):
+                            step = min(step, 0.5 * max(x - lo, 0.0))
+                        if step <= 0.0:
+                            continue
+                        z_f = z0.copy()
+                        if (np.isfinite(hi) and (x + step <= hi)) or (not np.isfinite(hi)):
+                            z_f[i] = x + step
+                            g_est[j] = (cost_fn(z_f) - base_cost) / step
+                        elif np.isfinite(lo) and (x - step >= lo):
+                            z_f[i] = x - step
+                            g_est[j] = (base_cost - cost_fn(z_f)) / step
+
+                    v_zero = 0
+                    v_zero_x0 = 0
+                    v_zero_u = 0
+                    v_zero_tf = 0
+                    for i, g_i in zip(near_idx, g_est):
+                        lo = float(lb[i])
+                        hi = float(ub[i])
+                        x = float(z0[i])
+                        v_i = 1.0
+                        if g_i < 0.0 and np.isfinite(hi):
+                            v_i = hi - x
+                        elif g_i > 0.0 and np.isfinite(lo):
+                            v_i = x - lo
+                        if v_i <= 0.0:
+                            v_zero += 1
+                            if i < solver.n_x:
+                                v_zero_x0 += 1
+                            elif i < nX + nU:
+                                v_zero_u += 1
+                            elif i == nX + nU:
+                                v_zero_tf += 1
+                    v_info = (
+                        f" near_x0=(lo={near_x0[0]},hi={near_x0[1]})"
+                        f" v0={v_zero} (x0={v_zero_x0},u={v_zero_u},tf={v_zero_tf})"
+                    )
+            except Exception as exc:  # pragma: no cover - diagnostics only
+                v_info = f" vinfo_error={exc!r}"
+
+            print(
+                "[lsq_diag] "
+                f"reason={reason} "
+                f"type={traj_type.value} dyn={dyn_tag} "
+                f"wind={scenario.wind_speed:.1f}@{scenario.wind_direction_deg:.0f} "
+                f"alt={scenario.initial_altitude_m:.1f} dist={scenario.target_distance_m:.1f} "
+                f"bearing={scenario.target_bearing_deg:.0f} "
+                f"brake_sym={brake_sym:.3f} tf={tf0:.2f} "
+                f"U[min,max]=({float(np.min(U0)):.3f},{float(np.max(U0)):.3f}) "
+                f"near_U=(lo={near_u[0]},hi={near_u[1]}) near_tf=(lo={near_tf[0]},hi={near_tf[1]}) "
+                f"{r_info}{warn_msg}{v_info}",
+                flush=True,
+            )
+
         t0 = time.perf_counter()
-        lsq = scipy.optimize.least_squares(
-            residual,
-            z0,
-            bounds=(lb, ub),
-            max_nfev=int(gpm_cfg.lsq_max_nfev),
-        )
+        x_scale = str(getattr(gpm_cfg, "lsq_x_scale", "jac")).strip().lower()
+        if x_scale not in {"jac", "auto"}:
+            x_scale = "jac"
+        x_scale_arg = "jac" if x_scale == "jac" else 1.0
+        if diag_mode == "none":
+            lsq = scipy.optimize.least_squares(
+                residual,
+                z0,
+                bounds=(lb, ub),
+                max_nfev=int(gpm_cfg.lsq_max_nfev),
+                x_scale=x_scale_arg,
+            )
+        else:
+            import warnings
+
+            with warnings.catch_warnings(record=True) as warn_list:
+                warnings.simplefilter("always", RuntimeWarning)
+                lsq = scipy.optimize.least_squares(
+                    residual,
+                    z0,
+                    bounds=(lb, ub),
+                    max_nfev=int(gpm_cfg.lsq_max_nfev),
+                    x_scale=x_scale_arg,
+                )
+            warn_msgs = [str(w.message) for w in warn_list]
+            if diag_mode == "always":
+                _lsq_diag("always", warn_msgs)
+            elif warn_msgs:
+                _lsq_diag("warn", warn_msgs)
         solve_time = float(time.perf_counter() - t0)
         z_sol = np.asarray(lsq.x, dtype=float)
         solver.last_solution_z = z_sol.copy()
@@ -609,7 +973,17 @@ def _solve_gpm_task(task: Tuple[Scenario, TrajectoryType]) -> Optional[LibraryTr
 
         traj_metrics = compute_trajectory_metrics(traj, turn_eps_deg=float(gpm_cfg.shape_turn_eps_deg))
         shape_ok, shape_reason = _shape_constraints_ok(traj_type, traj_metrics, gpm_cfg)
-        traj.metadata = {**(traj.metadata or {}), **traj_metrics, "shape_ok": bool(shape_ok), "shape_reason": shape_reason}
+        wind_metrics = compute_wind_drift_metrics(traj, scenario=scenario, wind_I=wind_I)
+        traj.metadata = {
+            **(traj.metadata or {}),
+            **traj_metrics,
+            **wind_metrics,
+            "shape_ok": bool(shape_ok),
+            "shape_reason": shape_reason,
+            "wind_ratio": float(wind_ratio),
+            "wind_speed_mps": float(wind_speed),
+            "init_yaw_mode": str(mode),
+        }
 
         if bool(gpm_cfg.shape_enforce) and not shape_ok:
             return None
@@ -620,6 +994,7 @@ def _solve_gpm_task(task: Tuple[Scenario, TrajectoryType]) -> Optional[LibraryTr
             "brake_sym_ref": brake_sym,
             "dynamics_mode": dyn_tag,
             "trajectory_metrics": traj_metrics,
+            "wind_metrics": wind_metrics,
             "shape_ok": bool(shape_ok),
             "shape_reason": shape_reason,
         }
@@ -633,7 +1008,17 @@ def _solve_gpm_task(task: Tuple[Scenario, TrajectoryType]) -> Optional[LibraryTr
 
     traj_metrics = compute_trajectory_metrics(traj, turn_eps_deg=float(gpm_cfg.shape_turn_eps_deg))
     shape_ok, shape_reason = _shape_constraints_ok(traj_type, traj_metrics, gpm_cfg)
-    traj.metadata = {**(traj.metadata or {}), **traj_metrics, "shape_ok": bool(shape_ok), "shape_reason": shape_reason}
+    wind_metrics = compute_wind_drift_metrics(traj, scenario=scenario, wind_I=wind_I)
+    traj.metadata = {
+        **(traj.metadata or {}),
+        **traj_metrics,
+        **wind_metrics,
+        "shape_ok": bool(shape_ok),
+        "shape_reason": shape_reason,
+        "wind_ratio": float(wind_ratio),
+        "wind_speed_mps": float(wind_speed),
+        "init_yaw_mode": str(mode),
+    }
 
     if bool(gpm_cfg.shape_enforce) and not shape_ok:
         return None
@@ -655,6 +1040,7 @@ def _solve_gpm_task(task: Tuple[Scenario, TrajectoryType]) -> Optional[LibraryTr
         "brake_sym_ref": brake_sym,
         "dynamics_mode": dyn_tag,
         "trajectory_metrics": traj_metrics,
+        "wind_metrics": wind_metrics,
         "shape_ok": bool(shape_ok),
         "shape_reason": shape_reason,
     }

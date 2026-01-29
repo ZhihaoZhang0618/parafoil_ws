@@ -181,3 +181,31 @@ def test_nofly_polygon_hard_violation():
     poly = NoFlyPolygon(vertices=np.array([[-50.0, -50.0], [50.0, -50.0], [50.0, 50.0], [-50.0, 50.0]]))
     selection = selector.select(state, desired, wind, terrain=None, no_fly_circles=[], no_fly_polygons=[poly])
     assert selection.reason == "no_reachable_candidate"
+
+
+def test_desired_target_unreachable_wind_reason():
+    cfg = LandingSiteSelectorConfig(
+        enabled=True,
+        grid_resolution_m=10.0,
+        search_radius_m=60.0,
+        max_candidates=400,
+        random_seed=0,
+        w_risk=0.0,
+        w_distance=1.0,
+        w_reach_margin=0.0,
+        w_energy=0.0,
+        nofly_buffer_m=0.0,
+        nofly_weight=0.0,
+        snap_to_terrain=False,
+        min_progress_mps=0.0,
+        reachability=ReachabilityConfig(brake=0.2, min_time_s=2.0, max_time_s=200.0, wind_margin_mps=0.2),
+    )
+    selector = LandingSiteSelector(cfg)
+    state = _make_state(altitude_m=80.0)
+    desired = Target(p_I=np.array([60.0, 0.0, 0.0], dtype=float))
+    v_air, _ = selector._polar.interpolate(cfg.reachability.brake)
+    wind = Wind(v_I=np.array([-float(v_air) - 0.5, 0.0, 0.0], dtype=float))
+
+    selection = selector.select(state, desired, wind, terrain=None, no_fly_circles=[], no_fly_polygons=[])
+    assert selection.reason == "unreachable_wind"
+    assert selection.metadata.get("desired_v_g_along_max_mps", 1.0) <= cfg.min_progress_mps + 1e-6

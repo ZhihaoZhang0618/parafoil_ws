@@ -63,9 +63,12 @@ def adapt_trajectory(library_entry: LibraryTrajectory, state: State, target: Tar
         s_new = sp.copy()
         s_new.p_I = np.array([p_new_xy[0], p_new_xy[1], p_new_d], dtype=float)
 
-        # Velocity rotate+scale horizontal, scale vertical.
-        v_new_xy = R @ (scale_xy * sp.v_I[:2])
-        v_new_d = scale_z * float(sp.v_I[2])
+        # Velocity scaling consistent with time scaling.
+        # If scale_t == scale_xy, horizontal speed stays unchanged.
+        vel_scale_xy = scale_xy / max(scale_t, 1e-6)
+        vel_scale_z = scale_z / max(scale_t, 1e-6)
+        v_new_xy = R @ (vel_scale_xy * sp.v_I[:2])
+        v_new_d = vel_scale_z * float(sp.v_I[2])
         s_new.v_I = np.array([v_new_xy[0], v_new_xy[1], v_new_d], dtype=float)
 
         t_new = float(state.t + scale_t * wp.t)
@@ -76,5 +79,12 @@ def adapt_trajectory(library_entry: LibraryTrajectory, state: State, target: Tar
         waypoints=waypoints,
         controls=list(traj.controls),
         trajectory_type=traj.trajectory_type,
-        metadata={**(traj.metadata or {}), "adapted": True, "scale_xy": scale_xy, "scale_z": scale_z, "yaw": yaw},
+        metadata={
+            **(traj.metadata or {}),
+            "adapted": True,
+            "scale_xy": scale_xy,
+            "scale_z": scale_z,
+            "scale_t": scale_t,
+            "yaw": yaw,
+        },
     )

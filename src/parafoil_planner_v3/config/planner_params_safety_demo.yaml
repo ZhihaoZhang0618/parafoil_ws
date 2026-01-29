@@ -25,6 +25,8 @@ parafoil_planner_v3:
       max_scale_xy: 1.35
       min_scale_z: 0.65
       max_scale_z: 1.35
+      skip_if_unreachable_wind: true
+      min_track_ground_speed_mps: 0.2
 
     # === GPM (online optimization) ===
     gpm:
@@ -51,6 +53,18 @@ parafoil_planner_v3:
     wind:
       use_topic: true
       default_ned: [0.0, 4.0, 0.0]
+      input_frame: "ned"
+      convention: "to"
+      timeout_s: 2.0
+      max_speed_mps: 0.0
+
+    # === Headwind / aimpoint planning ===
+    headwind:
+      enable: true
+      wind_ratio_trigger: 0.8
+      max_aim_offset_m: 200.0
+      min_progress_mps: 0.0
+      aimpoint_nofly_projection: true
 
     # === Target & update policy ===
     target:

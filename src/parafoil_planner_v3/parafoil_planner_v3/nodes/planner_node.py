@@ -40,6 +40,15 @@ from parafoil_planner_v3.planner_core import PlannerConfig, PlannerCore
 from parafoil_planner_v3.target_update_policy import TargetUpdatePolicy, TargetUpdatePolicyConfig, UpdateReason
 from parafoil_planner_v3.trajectory_library.library_manager import TrajectoryLibrary
 from parafoil_planner_v3.types import GuidancePhase, State, Target, Wind
+from parafoil_planner_v3.utils.wind_utils import (
+    WindConvention,
+    WindInputFrame,
+    clip_wind_xy,
+    frame_from_frame_id,
+    parse_wind_convention,
+    parse_wind_input_frame,
+    to_ned_wind_to,
+)
 
 
 @dataclass(frozen=True)
@@ -111,6 +120,8 @@ class PlannerNode(Node):
         self.declare_parameter("library.max_scale_xy", 0.0)
         self.declare_parameter("library.min_scale_z", 0.0)
         self.declare_parameter("library.max_scale_z", 0.0)
+        self.declare_parameter("library.skip_if_unreachable_wind", True)
+        self.declare_parameter("library.min_track_ground_speed_mps", 0.2)
 
         self.declare_parameter("gpm.num_nodes", 20)
         self.declare_parameter("gpm.scheme", "LGL")
@@ -187,6 +198,11 @@ class PlannerNode(Node):
         self.declare_parameter("wind.use_topic", True)
         self.declare_parameter("wind.topic", "/wind_estimate")
         self.declare_parameter("wind.default_ned", [0.0, 2.0, 0.0])
+        # /wind_estimate conversion -> internal standard: NED + wind-to
+        self.declare_parameter("wind.input_frame", "ned")  # ned|enu|auto
+        self.declare_parameter("wind.convention", "to")  # to|from
+        self.declare_parameter("wind.timeout_s", 2.0)
+        self.declare_parameter("wind.max_speed_mps", 0.0)  # 0 disables clipping
 
         # Safety-first landing site selection
         self.declare_parameter("safety.enable", False)
@@ -219,6 +235,13 @@ class PlannerNode(Node):
         self.declare_parameter("safety.risk.layer_files", [])
         self.declare_parameter("safety.risk.layer_weights", [])
         self.declare_parameter("safety.risk.layer_names", [])
+
+        # Headwind / aimpoint planning
+        self.declare_parameter("headwind.enable", True)
+        self.declare_parameter("headwind.wind_ratio_trigger", 0.8)
+        self.declare_parameter("headwind.max_aim_offset_m", 200.0)
+        self.declare_parameter("headwind.min_progress_mps", 0.0)
+        self.declare_parameter("headwind.aimpoint_nofly_projection", True)
 
         # ------------------------------------------------------------------
         # Build components
@@ -259,6 +282,8 @@ class PlannerNode(Node):
             library_max_scale_xy=float(self.get_parameter("library.max_scale_xy").value),
             library_min_scale_z=float(self.get_parameter("library.min_scale_z").value),
             library_max_scale_z=float(self.get_parameter("library.max_scale_z").value),
+            library_skip_if_unreachable_wind=bool(self.get_parameter("library.skip_if_unreachable_wind").value),
+            library_min_track_ground_speed_mps=float(self.get_parameter("library.min_track_ground_speed_mps").value),
             solver_method=str(self.get_parameter("solver.method").value),
             solver_maxiter=int(self.get_parameter("solver.maxiter").value),
             solver_ftol=float(self.get_parameter("solver.ftol").value),
@@ -292,6 +317,11 @@ class PlannerNode(Node):
             no_fly_circles=(),
             no_fly_polygons=(),
             no_fly_polygons_file=str(self.get_parameter("constraints.no_fly_polygons_file").value),
+            headwind_enable=bool(self.get_parameter("headwind.enable").value),
+            headwind_wind_ratio_trigger=float(self.get_parameter("headwind.wind_ratio_trigger").value),
+            headwind_max_aim_offset_m=float(self.get_parameter("headwind.max_aim_offset_m").value),
+            headwind_min_progress_mps=float(self.get_parameter("headwind.min_progress_mps").value),
+            headwind_aimpoint_nofly_projection=bool(self.get_parameter("headwind.aimpoint_nofly_projection").value),
         )
         no_fly_raw = str(self.get_parameter("constraints.no_fly_circles").value).strip()
         if no_fly_raw:
@@ -390,6 +420,7 @@ class PlannerNode(Node):
                 nofly_buffer_m=float(self.get_parameter("safety.selector.nofly_buffer_m").value),
                 nofly_weight=float(self.get_parameter("safety.selector.nofly_weight").value),
                 snap_to_terrain=bool(self.get_parameter("safety.selector.snap_to_terrain").value),
+                min_progress_mps=float(self.get_parameter("headwind.min_progress_mps").value),
                 reachability=reach_cfg,
             )
             landing_site_selector = LandingSiteSelector(config=selector_cfg, risk_map=risk_map)
@@ -450,9 +481,16 @@ class PlannerNode(Node):
         # ------------------------------------------------------------------
         self._odom: Optional[Odometry] = None
         self._imu_w_B: Optional[np.ndarray] = None
-        self._wind: Optional[np.ndarray] = None
+        self._wind_ned_to: Optional[np.ndarray] = None
+        self._wind_recv_time_s: Optional[float] = None
+        self._wind_msg_time_s: Optional[float] = None
+        self._wind_frame_id: str = ""
+        self._wind_input_frame_used: str = ""
+        self._wind_convention_used: str = ""
+        self._wind_clipped: bool = False
         self._target_ned: Optional[np.ndarray] = np.asarray(self.get_parameter("target.position_ned").value, dtype=float).reshape(3)
         self._safe_target_ned: Optional[np.ndarray] = None
+        self._aimpoint_ned: Optional[np.ndarray] = None
         self._polar = PolarTable()
 
         self._force_replan = True
@@ -509,7 +547,46 @@ class PlannerNode(Node):
         )
 
     def _on_wind(self, msg: Vector3Stamped) -> None:
-        self._wind = np.array([msg.vector.x, msg.vector.y, msg.vector.z], dtype=float)
+        raw = np.array([msg.vector.x, msg.vector.y, msg.vector.z], dtype=float)
+        now_s = self.get_clock().now().nanoseconds * 1e-9
+        stamp_s = _stamp_to_sec(msg.header.stamp)
+        if stamp_s <= 1e-6:
+            stamp_s = now_s
+
+        input_frame_raw = str(self.get_parameter("wind.input_frame").value)
+        convention_raw = str(self.get_parameter("wind.convention").value)
+        try:
+            input_frame = parse_wind_input_frame(input_frame_raw)
+        except ValueError as e:
+            self.get_logger().error(str(e))
+            input_frame = WindInputFrame.NED
+        try:
+            convention = parse_wind_convention(convention_raw)
+        except ValueError as e:
+            self.get_logger().error(str(e))
+            convention = WindConvention.TO
+
+        input_frame_used = input_frame
+        if input_frame == WindInputFrame.AUTO:
+            guessed = frame_from_frame_id(msg.header.frame_id)
+            input_frame_used = guessed if guessed is not None else WindInputFrame.NED
+
+        try:
+            wind_ned = to_ned_wind_to(raw, input_frame=input_frame_used, convention=convention)
+        except Exception as e:
+            self.get_logger().error(f"Failed to convert wind estimate: {e}")
+            return
+
+        max_speed_mps = float(self.get_parameter("wind.max_speed_mps").value)
+        wind_ned, clipped = clip_wind_xy(wind_ned, max_speed_mps=max_speed_mps)
+
+        self._wind_ned_to = wind_ned
+        self._wind_recv_time_s = now_s
+        self._wind_msg_time_s = stamp_s
+        self._wind_frame_id = str(msg.header.frame_id)
+        self._wind_input_frame_used = input_frame_used.value
+        self._wind_convention_used = convention.value
+        self._wind_clipped = bool(clipped)
 
     def _on_target(self, msg: PoseStamped) -> None:
         # /target is PoseStamped in world ENU. Convert to NED.
@@ -531,11 +608,39 @@ class PlannerNode(Node):
         else:
             self.get_logger().warn(f"Unknown guidance phase '{msg.data}'")
 
-    def _wind_est(self) -> Wind:
-        if self._wind is not None:
-            return Wind(v_I=self._wind)
-        default = np.asarray(self.get_parameter("wind.default_ned").value, dtype=float).reshape(3)
-        return Wind(v_I=default)
+    def _wind_est(self) -> tuple[Wind, dict]:
+        now_s = self.get_clock().now().nanoseconds * 1e-9
+        diag = {
+            "source": "default",
+            "age_s": float("inf"),
+            "frame_id": str(self._wind_frame_id),
+            "input_frame": str(self._wind_input_frame_used),
+            "convention": str(self._wind_convention_used),
+            "clipped": bool(self._wind_clipped),
+        }
+
+        if not bool(self.get_parameter("wind.use_topic").value):
+            default = np.asarray(self.get_parameter("wind.default_ned").value, dtype=float).reshape(3)
+            diag["source"] = "param"
+            diag["age_s"] = 0.0
+            return Wind(v_I=default), diag
+
+        if self._wind_ned_to is None or self._wind_recv_time_s is None:
+            default = np.asarray(self.get_parameter("wind.default_ned").value, dtype=float).reshape(3)
+            diag["source"] = "default(no_msg)"
+            diag["age_s"] = float("inf")
+            return Wind(v_I=default), diag
+
+        timeout_s = float(self.get_parameter("wind.timeout_s").value)
+        age_s = float(now_s - self._wind_recv_time_s)
+        diag["age_s"] = float(age_s)
+        if timeout_s > 0.0 and age_s > timeout_s:
+            default = np.asarray(self.get_parameter("wind.default_ned").value, dtype=float).reshape(3)
+            diag["source"] = "default(stale)"
+            return Wind(v_I=default), diag
+
+        diag["source"] = "topic"
+        return Wind(v_I=self._wind_ned_to), diag
 
     def _load_policy_config(self) -> TargetUpdatePolicyConfig:
         approach_allow_update = self.get_parameter("target.update_policy.approach_allow_update").value
@@ -742,11 +847,35 @@ class PlannerNode(Node):
             safe_marker.pose.position.z = z
             safe_marker.pose.orientation.w = 1.0
 
+        aim_marker = None
+        if self._aimpoint_ned is not None:
+            aim_marker = Marker()
+            aim_marker.header.stamp = stamp
+            aim_marker.header.frame_id = frame_id
+            aim_marker.ns = "planned_trajectory"
+            aim_marker.id = 3
+            aim_marker.type = Marker.SPHERE
+            aim_marker.action = Marker.ADD
+            aim_marker.scale.x = 1.2
+            aim_marker.scale.y = 1.2
+            aim_marker.scale.z = 1.2
+            aim_marker.color.r = 0.2
+            aim_marker.color.g = 0.4
+            aim_marker.color.b = 1.0
+            aim_marker.color.a = 1.0
+            x, y, z = _ned_to_enu_xyz(self._aimpoint_ned)
+            aim_marker.pose.position.x = x
+            aim_marker.pose.position.y = y
+            aim_marker.pose.position.z = z
+            aim_marker.pose.orientation.w = 1.0
+
         arr = MarkerArray()
         arr.markers.append(line)
         arr.markers.append(target_marker)
         if safe_marker is not None:
             arr.markers.append(safe_marker)
+        if aim_marker is not None:
+            arr.markers.append(aim_marker)
         self.pub_preview.publish(arr)
 
     def _tick(self) -> None:
@@ -754,7 +883,10 @@ class PlannerNode(Node):
         if state is None or self._target_ned is None:
             return
 
-        wind = self._wind_est()
+        wind, wind_diag = self._wind_est()
+        wind_speed = float(np.linalg.norm(wind.v_I[:2]))
+        v_air_max, _ = self._polar.interpolate(0.0)
+        wind_ratio = float(wind_speed / max(float(v_air_max), 1e-6))
         desired_target = self._target_for_planner(state, wind)
 
         if self._force_replan:
@@ -781,40 +913,85 @@ class PlannerNode(Node):
                 new_selection = None
 
             if new_selection is not None:
-                current_target = self._target_policy.current_target or new_selection.target
-                current_margin = self._compute_current_target_margin(state, wind, current_target.position_xy)
-                planning_target, policy_reason = self._target_policy.update(
-                    new_selection,
-                    self._current_phase,
-                    self.get_clock().now().nanoseconds * 1e-9,
-                    current_margin,
-                )
-                policy_state = self._target_policy.current_state
-                selection_override = policy_state.selection if policy_state is not None else new_selection
+                now_s = self.get_clock().now().nanoseconds * 1e-9
+                if str(new_selection.reason) == "unreachable_wind":
+                    # Force safety target update when wind makes the desired target unreachable.
+                    self._target_policy.force_update(
+                        new_selection.target,
+                        float(new_selection.score),
+                        float(new_selection.reach_margin_mps),
+                        new_selection,
+                        now_s,
+                        reason=UpdateReason.UNREACHABLE_WIND,
+                    )
+                    planning_target = new_selection.target
+                    policy_reason = UpdateReason.UNREACHABLE_WIND
+                    selection_override = new_selection
+                else:
+                    current_target = self._target_policy.current_target or new_selection.target
+                    current_margin = self._compute_current_target_margin(state, wind, current_target.position_xy)
+                    planning_target, policy_reason = self._target_policy.update(
+                        new_selection,
+                        self._current_phase,
+                        now_s,
+                        current_margin,
+                    )
+                    policy_state = self._target_policy.current_state
+                    selection_override = policy_state.selection if policy_state is not None else new_selection
 
         traj, info = self.planner.plan(state, planning_target, wind, landing_site_selection=selection_override)
         selection = self.planner.last_site_selection
+        aimpoint_target = self.planner.last_aimpoint_target
         if selection is not None and selection.reason != "disabled":
             self._safe_target_ned = selection.target.p_I.copy()
         else:
             self._safe_target_ned = None
+        if aimpoint_target is not None:
+            self._aimpoint_ned = aimpoint_target.p_I.copy()
+        else:
+            self._aimpoint_ned = None
         self._publish_path(traj)
         self._force_replan = False
 
         s = String()
         safety_msg = ""
         if selection is not None and selection.reason != "disabled":
+            meta = selection.metadata or {}
+            tgo = meta.get("touchdown_tgo_s")
+            v_air = meta.get("touchdown_v_air_mps")
+            sink = meta.get("touchdown_sink_mps")
+            v_g_along = meta.get("touchdown_v_g_along_max_mps")
+            aim_used = meta.get("aimpoint_used")
+            aim_n = meta.get("aimpoint_n")
+            aim_e = meta.get("aimpoint_e")
             safety_msg = (
-                f" safety={selection.reason} risk={selection.risk:.3g} "
+                f" safety={selection.reason} reason={selection.reason} risk={selection.risk:.3g} "
                 f"dist={selection.distance_to_desired_m:.1f}m margin={selection.reach_margin_mps:.2f}mps"
             )
+            if tgo is not None and np.isfinite(tgo):
+                safety_msg += f" tgo={float(tgo):.1f}s"
+            if v_air is not None and np.isfinite(v_air):
+                safety_msg += f" v_air={float(v_air):.2f}"
+            if sink is not None and np.isfinite(sink):
+                safety_msg += f" sink={float(sink):.2f}"
+            if v_g_along is not None and np.isfinite(v_g_along):
+                safety_msg += f" v_g_along_max={float(v_g_along):.2f}"
+            if aim_used is not None:
+                safety_msg += f" aim_used={int(bool(aim_used))}"
+            if aim_n is not None and aim_e is not None:
+                safety_msg += f" aim={float(aim_n):.1f},{float(aim_e):.1f}"
             if policy_reason is not None:
                 safety_msg += f" policy={policy_reason.value}"
         s.data = (
             f"success={info.success} iters={info.iterations} "
             f"time={info.solve_time:.3f}s cost={info.cost:.3f} "
             f"max_violation={info.max_violation:.3g} terminal_err={info.terminal_error_m:.2f}m "
-            f"msg={info.message}{safety_msg}"
+            f"msg={info.message}"
+            f" wind={wind.v_I[0]:+.2f},{wind.v_I[1]:+.2f},{wind.v_I[2]:+.2f}"
+            f" wind_spd={wind_speed:.2f} V_air_max={float(v_air_max):.2f} ratio={wind_ratio:.2f}"
+            f" wind_src={wind_diag.get('source')}"
+            f" wind_age={float(wind_diag.get('age_s', 0.0)):.2f}s"
+            f"{safety_msg}"
         )
         self.pub_status.publish(s)
 

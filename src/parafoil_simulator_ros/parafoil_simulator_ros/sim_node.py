@@ -26,8 +26,10 @@ import numpy as np
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy
+from rclpy.parameter import Parameter
 from geometry_msgs.msg import Vector3Stamped, PoseStamped, Point, Quaternion, TransformStamped
 from nav_msgs.msg import Odometry, Path
+from sensor_msgs.msg import Imu
 from visualization_msgs.msg import Marker, MarkerArray
 from std_msgs.msg import ColorRGBA
 from tf2_ros import TransformBroadcaster
@@ -42,7 +44,7 @@ from parafoil_dynamics.integrators import (
 )
 from parafoil_dynamics.wind import WindModel, WindConfig
 from parafoil_dynamics.sensors import SensorModel, SensorConfig
-from parafoil_dynamics.math3d import quat_to_euler
+from parafoil_dynamics.math3d import quat_to_euler, quat_to_rotmat, rotmat_to_quat, normalize_quaternion
 
 
 class ParafoilSimulatorNode(Node):
@@ -84,6 +86,9 @@ class ParafoilSimulatorNode(Node):
         self.declare_parameter('initial_position', [0.0, 0.0, -500.0])
         self.declare_parameter('initial_velocity', [10.0, 0.0, 2.0])
         self.declare_parameter('initial_euler', [0.0, 0.0, 0.0])  # roll, pitch, yaw
+        self.declare_parameters('', [
+            ('initial_altitude', Parameter.Type.DOUBLE),
+        ])
         
         # Physical parameters
         self.declare_parameter('rho', 1.225)
@@ -148,6 +153,11 @@ class ParafoilSimulatorNode(Node):
         self.declare_parameter('sensor.accel_noise_std', [0.0, 0.0, 0.0])
         self.declare_parameter('sensor.gyro_noise_std', [0.0, 0.0, 0.0])
         self.declare_parameter('sensor.seed', -1)
+
+        # IMU output (/parafoil/imu)
+        # Publish at low rate to match typical flight logs (~1 Hz).
+        self.declare_parameter('imu.publish_rate', 1.0)  # [Hz], <=0 disables
+        self.declare_parameter('imu.frame_id', 'parafoil_body')
     
     def _load_parameters(self):
         """Load parameters from ROS2 parameter server."""
@@ -167,7 +177,12 @@ class ParafoilSimulatorNode(Node):
         self.initial_euler = np.array(
             self.get_parameter('initial_euler').value
         )
-        self.initial_altitude = -self.initial_position[2]
+        initial_altitude_param = self.get_parameter('initial_altitude')
+        if initial_altitude_param.type_ != Parameter.Type.NOT_SET:
+            self.initial_position[2] = -float(initial_altitude_param.value)
+            self.initial_altitude = float(initial_altitude_param.value)
+        else:
+            self.initial_altitude = -self.initial_position[2]
         
         # Build Params object
         self.params = Params(
@@ -239,6 +254,10 @@ class ParafoilSimulatorNode(Node):
             ),
             seed=None if sensor_seed < 0 else sensor_seed,
         )
+
+        # IMU output config
+        self.imu_publish_rate = float(self.get_parameter('imu.publish_rate').value)
+        self.imu_frame_id = str(self.get_parameter('imu.frame_id').value)
     
     def _init_simulation(self):
         """Initialize simulation state and models."""
@@ -266,9 +285,13 @@ class ParafoilSimulatorNode(Node):
         # Wind model
         self.wind_model = WindModel(self.wind_config)
         self.wind_model.reset()
+        self._last_wind = np.zeros(3, dtype=float)
         
         # Sensor model
         self.sensor_model = SensorModel(self.sensor_config)
+
+        # Cached latest measurement for low-rate publishers (e.g. IMU)
+        self._last_measurement = None
         
         # Simulation running flag
         self.is_running = True
@@ -295,6 +318,9 @@ class ParafoilSimulatorNode(Node):
         )
         self.pub_body_ang_vel = self.create_publisher(
             Vector3Stamped, '/body_ang_vel', qos
+        )
+        self.pub_imu = self.create_publisher(
+            Imu, '/parafoil/imu', qos
         )
         
         # RViz2 visualization publishers
@@ -333,6 +359,10 @@ class ParafoilSimulatorNode(Node):
     def _setup_timer(self):
         """Setup simulation timer."""
         self.timer = self.create_timer(self.ctl_dt, self._timer_callback)
+        if self.imu_publish_rate > 0.0:
+            self.imu_timer = self.create_timer(1.0 / self.imu_publish_rate, self._imu_timer_callback)
+        else:
+            self.imu_timer = None
     
     def _cmd_callback(self, msg: Vector3Stamped):
         """
@@ -379,6 +409,7 @@ class ParafoilSimulatorNode(Node):
         
         # Compute body-frame acceleration for sensors
         wind_I = self.wind_model.get_wind(self.state.t, self.dt_max)
+        self._last_wind = np.array(wind_I, dtype=float)
         body_acc = get_body_acceleration(
             self.state, self.cmd, self.params, wind_I
         )
@@ -403,6 +434,9 @@ class ParafoilSimulatorNode(Node):
     def _publish_measurements(self, measurement):
         """Publish sensor measurements to ROS topics."""
         stamp = self.get_clock().now().to_msg()
+
+        # Cache latest sensor measurement for low-rate publishers.
+        self._last_measurement = measurement
         
         # Position
         pos_msg = Vector3Stamped()
@@ -430,6 +464,45 @@ class ParafoilSimulatorNode(Node):
         gyro_msg.vector.y = measurement.body_ang_vel[1]
         gyro_msg.vector.z = measurement.body_ang_vel[2]
         self.pub_body_ang_vel.publish(gyro_msg)
+
+    def _imu_timer_callback(self):
+        """Publish a low-rate IMU message (/parafoil/imu)."""
+        if not self.is_running:
+            return
+        if self._last_measurement is None:
+            return
+
+        m = self._last_measurement
+        stamp = self.get_clock().now().to_msg()
+
+        imu_msg = Imu()
+        imu_msg.header.stamp = stamp
+        imu_msg.header.frame_id = self.imu_frame_id
+
+        # Raw IMU: orientation not provided (use /parafoil/odom for pose).
+        imu_msg.orientation.w = 1.0
+        imu_msg.orientation.x = 0.0
+        imu_msg.orientation.y = 0.0
+        imu_msg.orientation.z = 0.0
+        imu_msg.orientation_covariance[0] = -1.0
+
+        # Body-frame angular velocity [rad/s] (includes sensor noise).
+        imu_msg.angular_velocity.x = float(m.body_ang_vel[0])
+        imu_msg.angular_velocity.y = float(m.body_ang_vel[1])
+        imu_msg.angular_velocity.z = float(m.body_ang_vel[2])
+
+        # Body-frame specific force [m/s^2] (includes sensor noise).
+        imu_msg.linear_acceleration.x = float(m.body_acc[0])
+        imu_msg.linear_acceleration.y = float(m.body_acc[1])
+        imu_msg.linear_acceleration.z = float(m.body_acc[2])
+
+        # Covariances: diagonal from configured sensor std dev (gaussian).
+        ax, ay, az = (float(x) for x in np.asarray(self.sensor_config.accel_noise_std).tolist())
+        gx, gy, gz = (float(x) for x in np.asarray(self.sensor_config.gyro_noise_std).tolist())
+        imu_msg.linear_acceleration_covariance = [ax * ax, 0.0, 0.0, 0.0, ay * ay, 0.0, 0.0, 0.0, az * az]
+        imu_msg.angular_velocity_covariance = [gx * gx, 0.0, 0.0, 0.0, gy * gy, 0.0, 0.0, 0.0, gz * gz]
+
+        self.pub_imu.publish(imu_msg)
     
     def _publish_rviz_visualization(self):
         """Publish visualization messages for RViz2."""
@@ -446,14 +519,19 @@ class ParafoilSimulatorNode(Node):
         
         # Convert quaternion from NED to ENU
         # q_NED = [w, x, y, z] -> q_ENU needs rotation
-        q_ned = self.state.q_IB
-        # For NED to ENU: rotate 90 deg around Z, then 180 deg around X
-        # Simplified: swap x,y and negate z for visualization
+        q_ned = normalize_quaternion(self.state.q_IB)
+        # NED -> ENU rotation: 180 deg about axis (1,1,0)/sqrt(2)
+        R_en = np.array([[0.0, 1.0, 0.0],
+                         [1.0, 0.0, 0.0],
+                         [0.0, 0.0, -1.0]], dtype=float)
+        R_nb = quat_to_rotmat(q_ned)
+        R_eb = R_en @ R_nb
+        q_eb = rotmat_to_quat(R_eb)
         q_enu = Quaternion()
-        q_enu.w = q_ned[0]
-        q_enu.x = q_ned[2]   # swap
-        q_enu.y = q_ned[1]   # swap
-        q_enu.z = -q_ned[3]  # negate
+        q_enu.w = float(q_eb[0])
+        q_enu.x = float(q_eb[1])
+        q_enu.y = float(q_eb[2])
+        q_enu.z = float(q_eb[3])
         
         # 1. Publish PoseStamped
         pose_msg = PoseStamped()
@@ -522,7 +600,7 @@ class ParafoilSimulatorNode(Node):
         marker_msg.color.a = 1.0
         self.pub_marker.publish(marker_msg)
         
-        # 6. Publish canopy marker (box representing the parafoil canopy)
+        # 6. Publish canopy marker
         canopy_marker = Marker()
         canopy_marker.header.stamp = stamp
         canopy_marker.header.frame_id = 'parafoil_body'
@@ -530,28 +608,79 @@ class ParafoilSimulatorNode(Node):
         canopy_marker.id = 1
         canopy_marker.type = Marker.CUBE
         canopy_marker.action = Marker.ADD
-        canopy_marker.pose.position.x = 0.0
-        canopy_marker.pose.position.y = 0.0
-        canopy_marker.pose.position.z = 2.0  # Above body frame
+        canopy_marker.pose.position.x = float(self.params.r_canopy_B[0])
+        canopy_marker.pose.position.y = float(self.params.r_canopy_B[1])
+        canopy_marker.pose.position.z = float(self.params.r_canopy_B[2])
         canopy_marker.pose.orientation.w = 1.0
         canopy_marker.scale.x = self.params.c  # Chord
         canopy_marker.scale.y = self.params.b  # Span
-        canopy_marker.scale.z = 0.3            # Thickness
+        canopy_marker.scale.z = 0.2
         canopy_marker.color.r = 1.0
         canopy_marker.color.g = 0.5
         canopy_marker.color.b = 0.0
         canopy_marker.color.a = 0.8
         self.pub_marker.publish(canopy_marker)
+
+        payload_marker = Marker()
+        payload_marker.header.stamp = stamp
+        payload_marker.header.frame_id = 'parafoil_body'
+        payload_marker.ns = 'parafoil'
+        payload_marker.id = 2
+        payload_marker.type = Marker.SPHERE
+        payload_marker.action = Marker.ADD
+        payload_marker.pose.position.x = float(self.params.r_pd_B[0])
+        payload_marker.pose.position.y = float(self.params.r_pd_B[1])
+        payload_marker.pose.position.z = float(self.params.r_pd_B[2])
+        payload_marker.pose.orientation.w = 1.0
+        payload_marker.scale.x = 0.3
+        payload_marker.scale.y = 0.3
+        payload_marker.scale.z = 0.3
+        payload_marker.color.r = 0.1
+        payload_marker.color.g = 0.8
+        payload_marker.color.b = 0.2
+        payload_marker.color.a = 0.9
+        self.pub_marker.publish(payload_marker)
+
+        line_marker = Marker()
+        line_marker.header.stamp = stamp
+        line_marker.header.frame_id = 'parafoil_body'
+        line_marker.ns = 'parafoil'
+        line_marker.id = 3
+        line_marker.type = Marker.LINE_LIST
+        line_marker.action = Marker.ADD
+        line_marker.scale.x = 0.05
+        line_marker.color.r = 0.9
+        line_marker.color.g = 0.9
+        line_marker.color.b = 0.9
+        line_marker.color.a = 0.8
+        p1 = Point()
+        p1.x = float(self.params.r_canopy_B[0])
+        p1.y = float(self.params.r_canopy_B[1])
+        p1.z = float(self.params.r_canopy_B[2])
+        p2 = Point()
+        p2.x = float(self.params.r_pd_B[0])
+        p2.y = float(self.params.r_pd_B[1])
+        p2.z = float(self.params.r_pd_B[2])
+        line_marker.points = [p1, p2]
+        self.pub_marker.publish(line_marker)
     
     def _log_status(self):
         """Log current simulation status."""
         roll, pitch, yaw = quat_to_euler(self.state.q_IB)
+        v_ground = self.state.v_I
+        v_wind = self._last_wind if self._last_wind is not None else np.zeros(3, dtype=float)
+        v_air = v_ground - v_wind
         
         self.get_logger().info(
             f"t={self.state.t:.1f}s | "
             f"alt={self.state.altitude:.1f}m | "
-            f"pos=({self.state.p_I[0]:.1f}, {self.state.p_I[1]:.1f}) | "
-            f"v={np.linalg.norm(self.state.v_I):.1f}m/s | "
+            f"pos_ned=({self.state.p_I[0]:+.1f}, {self.state.p_I[1]:+.1f}, {self.state.p_I[2]:+.1f}) | "
+            f"v_gnd=({v_ground[0]:+.1f}, {v_ground[1]:+.1f}, {v_ground[2]:+.1f})"
+            f"/{np.linalg.norm(v_ground):.1f} | "
+            f"v_air=({v_air[0]:+.1f}, {v_air[1]:+.1f}, {v_air[2]:+.1f})"
+            f"/{np.linalg.norm(v_air):.1f} | "
+            f"wind=({v_wind[0]:+.1f}, {v_wind[1]:+.1f}, {v_wind[2]:+.1f})"
+            f"/{np.linalg.norm(v_wind):.1f} | "
             f"yaw={np.degrees(yaw):.1f}deg | "
             f"brake=({self.cmd.delta_cmd[0]:.2f}, {self.cmd.delta_cmd[1]:.2f})"
         )

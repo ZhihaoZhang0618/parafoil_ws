@@ -16,6 +16,9 @@ parafoil_planner_v3:
       cost_w_control: 0.05
       cost_w_time: 0.02
       cost_w_path_length: 0.0
+      # Skip KNN+adaptation when wind makes "track to target line" ill-conditioned.
+      skip_if_unreachable_wind: true
+      min_track_ground_speed_mps: 0.2
 
     # === GPM (online optimization) ===
     gpm:
@@ -30,6 +33,25 @@ parafoil_planner_v3:
       brake: 0.2
       wind_correction_gain: 1.0
       min_ground_speed: 0.5
+
+    # === Wind input (/wind_estimate) ===
+    # Internal standard: NED + wind-to (air velocity in inertial frame).
+    wind:
+      use_topic: true
+      topic: "/wind_estimate"
+      default_ned: [0.0, 2.0, 0.0]
+      input_frame: "ned"   # ned|enu|auto
+      convention: "to"     # to|from
+      timeout_s: 2.0
+      max_speed_mps: 0.0   # 0 disables clipping
+
+    # === Headwind / aimpoint planning ===
+    headwind:
+      enable: true
+      wind_ratio_trigger: 0.8
+      max_aim_offset_m: 200.0
+      min_progress_mps: 0.0
+      aimpoint_nofly_projection: true
 
     # === Noise model (planner state estimation) ===
     noise:

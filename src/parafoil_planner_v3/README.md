@@ -73,12 +73,86 @@
   - APPROACH：风修正 + 下滑道跟踪
   - FLARE：刹车斜坡（两种模式：spec_full_brake / touchdown_brake）
 
+### 轨迹库服务器（`parafoil_planner_v3/nodes/library_server_node.py`）
+
+- **用途**：独立加载轨迹库并提供 KNN 查询服务，便于外部调试/分析；不参与 Planner 的内部规划流程。
+- **参数**：
+  - `library_path`：轨迹库文件路径；为空则不加载。
+- **服务**：
+  - `/query_library`（`parafoil_msgs/QueryLibrary`）：输入 5D 特征 `[altitude_m, distance_m, bearing_rad, wind_speed_mps, wind_angle_rad]`，返回匹配索引、距离与 `trajectory_types`；`k<=0` 时默认取 5。
+  - `/reload_library`（`std_srvs/Trigger`）：按当前 `library_path` 重新加载。
+- **说明（业内常见做法）**：翼伞轨迹库检索一般采用“低维物理特征”索引（高度/距离/方位/风），以便在样本有限时保持可检索性与可解释性。该 5D 组合并非行业统一标准，但属于工程上常见的方案：用最小信息刻画**可达性**与**进场几何**，并与库生成阶段使用的特征保持一致。
+- **启动逻辑**：`full_system.launch.py` / `planner.launch.py` / `e2e_verification.launch.py` 中通过 `start_library_server` 条件启动，默认 `true`，且与 `library_path` 复用同一路径。
+- **与 Planner 的关系**：Planner 在 `use_library=true` 时自行从 `library_path` 加载库；关闭服务器不会影响规划，仅影响 `/query_library` 服务是否可用。
+
 ## 坐标系
 
 - **内部统一使用 NED**（北-东-下）。
 - ROS2 中：
   - `/target` 为 ENU，节点内部会转换为 NED。
   - `/planned_trajectory` 发布为 ENU（RViz 兼容）。
+  - `/wind_estimate` 默认假定为 **NED + wind-to**（风向量表示空气团在惯性系中的速度，单位 m/s）。若你的风估计输出为 ENU 或 wind-from（气象约定），请在 `planner_params.yaml` / `guidance_params.yaml` 中配置 `wind.input_frame` 与 `wind.convention` 做转换。
+
+## 风（Wind）配置
+
+这一节专门说明 **风输入的约定/配置**，避免“坐标系/气象约定”混用导致规划与制导方向反了。
+
+### 1) 内部约定：NED + wind-to（推荐）
+
+- **内部统一**：`wind_ned_to = [north, east, down]`（m/s），表示“空气团在惯性系中的速度”（wind-to）。
+- 关系式：`v_ground = v_air + wind_to`（地速 = 空速 + 风）。
+- 若上游给的是 **wind-from**（气象约定，“风从哪里来”），内部会做：`wind_to = -wind_from`。
+
+### 2) `/wind_estimate` 消息约定（Vector3Stamped）
+
+`/wind_estimate` 使用 `geometry_msgs/Vector3Stamped`，我们约定向量分量含义如下：
+
+- 当输入是 **NED**：`vector = [north, east, down]`，推荐 `header.frame_id="ned"`。
+- 当输入是 **ENU**：`vector = [east, north, up]`，推荐 `header.frame_id="enu"`/`"world"`/`"map"`。
+
+> 说明：`wind.input_frame=auto` 时会尝试用 `header.frame_id` 推断 ENU/NED（推断失败默认按 NED）。
+
+### 3) 风输入源：topic 与默认值回退
+
+Planner 与 Guidance 都有同一套风参数（分别在 `config/planner_params.yaml`、`config/guidance_params.yaml`）：
+
+- `wind.use_topic=true`：订阅 `wind.topic`（默认 `/wind_estimate`）。
+  - 若 **没有收到消息** 或 **超过 `wind.timeout_s` 未更新**，自动回退到 `wind.default_ned`。
+- `wind.use_topic=false`：始终使用 `wind.default_ned`（离线验证/没接估计器时有用）。
+
+注意：`wind.default_ned` 只是 **参数兜底**，不会“自动从仿真器读取”。如果你在跑仿真，建议启用 `/wind_estimate`（见下文的 `wind_estimator_node`）。
+
+### 4) 上游格式转换（只描述“输入是什么”）
+
+内部标准始终是 **NED + wind-to**；以下参数仅用于把“上游输入”转换成内部标准：
+
+```yaml
+wind:
+  input_frame: "ned"   # ned|enu|auto
+  convention: "to"     # to|from (from 会取反转换成 wind-to)
+```
+
+典型场景：
+- **推荐/默认（本仓库仿真 + fake wind estimator）**：`input_frame=ned`，`convention=to`（不需要额外转换）。
+- 若你的估计器输出是 **ENU + wind-from**：设置 `input_frame=enu`，`convention=from`。
+
+### 5) 限幅、滤波与强风保护
+
+- `wind.max_speed_mps`：对水平风（N/E）限幅；0 表示关闭（D 分量不处理）。
+- Guidance 可启用风低通/抗突变：`wind.filter.*`（见 `config/guidance_params.yaml`）。
+- 轨迹库在强风下更容易“选到勉强可行但误差大”的邻居，因此 PlannerCore 提供保护：
+  - `library.skip_if_unreachable_wind=true`：当“沿目标方向的地速”过小/不可达时跳过轨迹库，直接走 GPM/回退链路。
+  - `library.min_track_ground_speed_mps`：上述判定的最低地速阈值。
+  - 相关诊断可在 `/planner_status` 里看到：`wind_src` / `wind_age` / `ratio` / `solver_info.message`。
+
+### 6) Launch 中与风相关的参数（仿真）
+
+在 `full_system.launch.py` / `e2e_verification.launch.py` 里：
+
+- `start_wind_estimator:=true`（默认）：启动 `wind_estimator_node` 发布 `wind_topic`（默认 `/wind_estimate`）。
+- `wind_enable_steady|wind_enable_gust|wind_enable_colored`、`wind_steady_n/e/d`、`wind_gust_*`、`wind_colored_*`、`wind_seed`：
+  - 传给模拟器用于生成风场；
+  - 同时也传给 `wind_estimator_node`，保证“仿真真值风”和“planner/guidance 使用的风话题”一致。
 
 ## 快速开始
 
@@ -194,6 +268,58 @@ safety:
 - **No-fly**：支持 Circle / Polygon / GeoJSON。
 - **TargetUpdatePolicy**：相位锁定 + 滞后 + 紧急重选。
 
+### RiskGrid 示例（`config/demo_risk_grid.npz`）
+
+- **用途**：用于 Safety-first 落点选择的“风险代价图”（软约束）。当 `safety.enable=true` 且 `safety.risk.grid_file` 指向该文件时，Selector 会倾向选择低风险区域。
+- **坐标与原点**：`origin_n/origin_e` 是风险栅格左下角（最小 N/E）的坐标，不是飞机/目标原点。默认示例覆盖约 `N/E ∈ [-200, 200)`，把 `(0,0)` 放在栅格中间便于 Demo 造型。
+- **越界行为**：栅格范围外按 `safety.risk.oob_value` 处理（默认 1.0，等价“很危险”），真实任务建议按任务区域重建/平移栅格。
+- **与 No-fly 的关系**：`constraints.no_fly_circles/no_fly_polygons` 是硬约束（落点/轨迹进入即判违规），RiskGrid 是软代价（同范围不冲突，硬约束优先）。`safety_demo.launch.py` 里的 `no_fly_*` 参数主要用于 `safety_viz_node` 可视化。
+- **更大面积**：若要生成更大覆盖范围（例如约 `800m×800m`，仍把 `(0,0)` 放中间），可用 `generate_shenzhen_like_scene.py` 重新生成并指定：`--cells 400 --resolution 2.0 --origin-n -400 --origin-e -400`。
+
+### 城市场景 Demo（Shenzhen-like，2D）
+
+> 注意：这是**合成的示例场景**（“像深圳中心公园附近的复杂城市环境”风格），不是任何真实城市地图/数据。
+
+包含的元素（以正方形/长方形为主）：
+- **办公楼/居民楼**：作为 **no-fly 多边形（硬约束）**，并在 RiskGrid 中叠加“靠近更危险”的缓冲区。
+- **高压线走廊**：作为贯穿区域的 **no-fly 多边形（硬约束）**，RiskGrid 中也赋高风险。
+- **推荐落点空地**：公园/荒地作为 **低风险区域（软偏好）**；另外在公园内放置“水体”高风险块，避免落水。
+
+相关文件（已生成）：
+- 风险栅格：`src/parafoil_planner_v3/config/shenzhen_like_risk_grid_400x400.npz`（400×400，1m 分辨率，覆盖 `N/E ∈ [-200, 200)`）
+- 禁飞多边形：`src/parafoil_planner_v3/config/shenzhen_like_no_fly_polygons.json`（带 `clearance_m`，坐标为 NED 平面 `(north,east)` 米）
+- 对应参数：`src/parafoil_planner_v3/config/planner_params_safety_shenzhen_like.yaml`
+
+重新生成（默认 400×400、1m）：
+
+```bash
+python3 /home/aims/parafoil_ws/src/parafoil_planner_v3/scripts/generate_shenzhen_like_scene.py \
+  --output-npz /home/aims/parafoil_ws/src/parafoil_planner_v3/config/shenzhen_like_risk_grid_400x400.npz \
+  --output-nofly /home/aims/parafoil_ws/src/parafoil_planner_v3/config/shenzhen_like_no_fly_polygons.json
+```
+
+生成更大覆盖（约 800m×800m，仍把 `(0,0)` 放中间）。**大范围会自动增加楼群/道路/电力走廊等元素**：
+
+```bash
+python3 /home/aims/parafoil_ws/src/parafoil_planner_v3/scripts/generate_shenzhen_like_scene.py \
+  --output-npz /home/aims/parafoil_ws/src/parafoil_planner_v3/config/shenzhen_like_risk_grid_800x800.npz \
+  --output-nofly /home/aims/parafoil_ws/src/parafoil_planner_v3/config/shenzhen_like_no_fly_polygons_800x800.json \
+  --cells 400 --resolution 2.0 --origin-n -400 --origin-e -400
+```
+
+运行（带 RViz + SafetyViz 可视化风险/禁飞）：
+
+```bash
+cd /home/aims/parafoil_ws
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+
+ros2 launch parafoil_planner_v3 safety_demo.launch.py \
+  planner_params:=/home/aims/parafoil_ws/src/parafoil_planner_v3/config/planner_params_safety_shenzhen_like.yaml \
+  risk_grid_file:=/home/aims/parafoil_ws/src/parafoil_planner_v3/config/shenzhen_like_risk_grid_800x800.npz \
+  no_fly_polygons_file:=/home/aims/parafoil_ws/src/parafoil_planner_v3/config/shenzhen_like_no_fly_polygons_800x800.json
+```
+
 ### 一键安全 Demo
 
 ```bash
@@ -222,6 +348,13 @@ ros2 launch parafoil_planner_v3 safety_demo.launch.py
 - `/replan` (std_srvs/Trigger)
 - `/set_target` (parafoil_msgs/SetTarget)
 - `/query_library` (parafoil_msgs/QueryLibrary)
+- `/reload_library` (std_srvs/Trigger)
+
+## 仿真用风估计（可选）
+
+`parafoil_planner_v3` 本身不做风估计，但提供一个仿真用的发布节点 `wind_estimator_node`（移植自 v2），用于在不接入真实估计器时发布 `/wind_estimate`（NED + wind-to）。
+
+在 `e2e_verification.launch.py` / `full_system.launch.py` 中默认会启动该节点（`start_wind_estimator:=true`，默认 `wind_topic:=/wind_estimate`），并复用仿真的风参数（steady/gust/colored）。
 
 ## 验证与工具
 
@@ -254,6 +387,7 @@ parafoil_planner_v3/
 - **规划结果为空或不稳定**：检查 `gpm_params.yaml` 约束是否过严，或风速是否大于空速。
 - **安全落点频繁跳变**：增大 `target.update_policy.*` 的滞后阈值。
 - **轨迹库加载失败**：确认 `library_path` 与库版本匹配，必要时重新生成。
+- **风估计导致落点明显偏移**：优先确认 `/wind_estimate` 的坐标系与约定是否正确（默认 NED + wind-to）。可查看 `/planner_status` 中的 `wind_src/wind_age/ratio`，必要时配置 `wind.input_frame`（enu/ned/auto）、`wind.convention`（to/from）以及 `wind.timeout_s`。
 
 ## 相关阅读
 

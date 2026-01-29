@@ -155,6 +155,7 @@ class LandingSiteSelectorConfig:
     nofly_buffer_m: float = 20.0
     nofly_weight: float = 5.0
     snap_to_terrain: bool = True
+    min_progress_mps: float = 0.0
     reachability: ReachabilityConfig = field(default_factory=ReachabilityConfig)
 
 
@@ -213,6 +214,28 @@ class LandingSiteSelector:
             if float(np.linalg.norm(target_xy - center)) > radius:
                 ok = False
         return ok, margin, float(v_air)
+
+    def _ground_speed_along_max(
+        self,
+        state: State,
+        wind: Wind,
+        target_xy: np.ndarray,
+    ) -> Tuple[float, float, float, float, float, float]:
+        v_air, sink = self._polar.interpolate(float(self.config.reachability.brake))
+        wind_xy = np.asarray(wind.v_I[:2], dtype=float)
+        rel = np.asarray(target_xy, dtype=float) - state.position_xy
+        dist = float(np.linalg.norm(rel))
+        if dist <= 1e-6:
+            d_hat = np.array([1.0, 0.0], dtype=float)
+            v_g_along_max = float(v_air)
+        else:
+            d_hat = rel / dist
+            v_g_along_max = float(v_air) + float(np.dot(wind_xy, d_hat))
+        v_ground_vec = float(v_air) * d_hat + wind_xy
+        v_ground = float(np.linalg.norm(v_ground_vec))
+        ld_air = float(v_air / sink) if sink > 1e-6 else float("inf")
+        ld_ground = float(v_ground / sink) if sink > 1e-6 else float("inf")
+        return float(v_g_along_max), float(v_air), float(sink), float(v_ground), float(ld_air), float(ld_ground)
 
     def _nofly_penalty(
         self,
@@ -302,6 +325,28 @@ class LandingSiteSelector:
             )
 
         desired_xy = desired_target.position_xy
+        desired_tgo = self._time_to_land(state, terrain, float(desired_xy[0]), float(desired_xy[1]))
+        desired_ok = False
+        desired_margin = float("-inf")
+        desired_vg_along = float("nan")
+        desired_v_air = float("nan")
+        desired_sink = float("nan")
+        desired_v_ground = float("nan")
+        desired_ld_air = float("nan")
+        desired_ld_ground = float("nan")
+        if desired_tgo > 0.0:
+            desired_ok, desired_margin, _ = self._reachable(state, wind, desired_xy, desired_tgo)
+            (
+                desired_vg_along,
+                desired_v_air,
+                desired_sink,
+                desired_v_ground,
+                desired_ld_air,
+                desired_ld_ground,
+            ) = self._ground_speed_along_max(state, wind, desired_xy)
+        desired_unreachable = bool(
+            desired_tgo > 0.0 and desired_vg_along <= float(self.config.min_progress_mps)
+        )
         radius = self._search_radius(state, wind, terrain)
         center_xy = state.position_xy
         candidates = self._generate_candidates(center_xy, radius)
@@ -324,6 +369,14 @@ class LandingSiteSelector:
             ok, margin, v_air = self._reachable(state, wind, cand, tgo)
             if not ok:
                 continue
+            (
+                touchdown_vg_along,
+                touchdown_v_air,
+                touchdown_sink,
+                touchdown_v_ground,
+                touchdown_ld_air,
+                touchdown_ld_ground,
+            ) = self._ground_speed_along_max(state, wind, cand)
 
             risk_val = 0.0
             risk_details: Dict[str, float] = {}
@@ -356,6 +409,24 @@ class LandingSiteSelector:
                     "nofly_penalty": float(nofly_penalty),
                     "dist_to_desired_m": float(dist),
                     "reachable_margin_mps": float(margin),
+                    "desired_reachable": float(1.0 if desired_ok else 0.0),
+                    "desired_margin_mps": float(desired_margin),
+                    "desired_tgo_s": float(desired_tgo),
+                    "desired_v_g_along_max_mps": float(desired_vg_along),
+                    "desired_v_air_mps": float(desired_v_air),
+                    "desired_sink_mps": float(desired_sink),
+                    "desired_v_ground_mps": float(desired_v_ground),
+                    "desired_ld_air": float(desired_ld_air),
+                    "desired_ld_ground": float(desired_ld_ground),
+                    "desired_wind_speed_mps": float(np.linalg.norm(wind.v_I[:2])),
+                    "touchdown_tgo_s": float(tgo),
+                    "touchdown_v_g_along_max_mps": float(touchdown_vg_along),
+                    "touchdown_v_air_mps": float(touchdown_v_air),
+                    "touchdown_sink_mps": float(touchdown_sink),
+                    "touchdown_v_ground_mps": float(touchdown_v_ground),
+                    "touchdown_ld_air": float(touchdown_ld_air),
+                    "touchdown_ld_ground": float(touchdown_ld_ground),
+                    "touchdown_wind_speed_mps": float(np.linalg.norm(wind.v_I[:2])),
                 }
             )
 
@@ -371,7 +442,7 @@ class LandingSiteSelector:
                     distance_to_desired_m=float(dist),
                     reach_margin_mps=float(margin),
                     time_to_land_s=float(tgo),
-                    reason="ok",
+                    reason="unreachable_wind" if desired_unreachable else "ok",
                     metadata=metadata,
                 )
 

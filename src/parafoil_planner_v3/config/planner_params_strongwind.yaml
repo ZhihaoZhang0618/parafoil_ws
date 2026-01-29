@@ -7,12 +7,26 @@ parafoil_planner_v3:
 
     # Wind (fallback when /wind_estimate is absent)
     wind:
-      use_topic: false
+      use_topic: true
       default_ned: [0.0, 6.0, 0.0]
+      input_frame: "ned"
+      convention: "to"
+      timeout_s: 2.0
+      max_speed_mps: 0.0
+
+    # Headwind / aimpoint planning
+    headwind:
+      enable: true
+      wind_ratio_trigger: 0.8
+      max_aim_offset_m: 200.0
+      min_progress_mps: 0.0
+      aimpoint_nofly_projection: true
 
     # Library selection (online)
     library:
       k_neighbors: 5
+      skip_if_unreachable_wind: true
+      min_track_ground_speed_mps: 0.2
       enable_gpm_fine_tuning: true
       fine_tuning_trigger_m: 10.0
       terminal_pos_tol_m: 20.0

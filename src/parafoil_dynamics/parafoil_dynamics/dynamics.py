@@ -141,8 +141,9 @@ def dynamics(
     C_l = params.c_lp * p_hat + params.c_lda * delta_a + params.c_lb * beta
     
     # Pitch moment coefficient
-    # C_m = c_m0 + c_ma * alpha + c_mq * q_hat
-    C_m = params.c_m0 + params.c_ma * alpha + params.c_mq * q_hat
+    # C_m = c_m0 + c_ma * alpha + c_mq * q_hat + c_mds * delta_s
+    # NOTE: c_mds models brake-induced pitch moment (flare/zoom effect).
+    C_m = params.c_m0 + params.c_ma * alpha + params.c_mq * q_hat + params.c_mds * delta_s
     
     # Yaw moment coefficient
     # C_n = c_nr * r_hat + c_nda * delta_a + c_nb * beta + c_n_weath * wind_y

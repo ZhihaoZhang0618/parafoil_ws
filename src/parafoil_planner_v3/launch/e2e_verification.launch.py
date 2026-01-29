@@ -39,6 +39,8 @@ def generate_launch_description() -> LaunchDescription:
     use_library = LaunchConfiguration("use_library")
     library_path = LaunchConfiguration("library_path")
     start_library_server = LaunchConfiguration("start_library_server")
+    start_wind_estimator = LaunchConfiguration("start_wind_estimator")
+    wind_topic = LaunchConfiguration("wind_topic")
 
     # Recording and visualization
     record_bag = LaunchConfiguration("record_bag")
@@ -104,6 +106,8 @@ def generate_launch_description() -> LaunchDescription:
         DeclareLaunchArgument("use_library", default_value=TextSubstitution(text="false")),
         DeclareLaunchArgument("library_path", default_value=TextSubstitution(text="/tmp/parafoil_library.pkl")),
         DeclareLaunchArgument("start_library_server", default_value=TextSubstitution(text="true")),
+        DeclareLaunchArgument("start_wind_estimator", default_value=TextSubstitution(text="true")),
+        DeclareLaunchArgument("wind_topic", default_value=TextSubstitution(text="/wind_estimate")),
         DeclareLaunchArgument("sim_params", default_value=default_sim),
         DeclareLaunchArgument("sim_params_override", default_value=""),
         DeclareLaunchArgument("initial_altitude", default_value="50.0"),
@@ -166,6 +170,46 @@ def generate_launch_description() -> LaunchDescription:
     actions.append(
         Node(
             package="parafoil_planner_v3",
+            executable="wind_estimator_node",
+            name="fake_wind_estimator",
+            output="screen",
+            parameters=[
+                {
+                    "publish_rate": 10.0,
+                    "topic": wind_topic,
+                    "wind.enable_steady": ParameterValue(wind_enable_steady, value_type=bool),
+                    "wind.enable_gust": ParameterValue(wind_enable_gust, value_type=bool),
+                    "wind.enable_colored": ParameterValue(wind_enable_colored, value_type=bool),
+                    "wind.steady_wind_n": ParameterValue(wind_steady_n, value_type=float),
+                    "wind.steady_wind_e": ParameterValue(wind_steady_e, value_type=float),
+                    "wind.steady_wind_d": ParameterValue(wind_steady_d, value_type=float),
+                    "wind.gust_interval": ParameterValue(wind_gust_interval, value_type=float),
+                    "wind.gust_duration": ParameterValue(wind_gust_duration, value_type=float),
+                    "wind.gust_magnitude": ParameterValue(wind_gust_magnitude, value_type=float),
+                    "wind.colored_tau": ParameterValue(wind_colored_tau, value_type=float),
+                    "wind.colored_sigma": ParameterValue(wind_colored_sigma, value_type=float),
+                    "wind.seed": ParameterValue(wind_seed, value_type=int),
+                    # Default: publish (almost) unbiased wind; set noise/bias via rosparams if needed.
+                    "estimate.gust_noise_sigma": 0.0,
+                }
+            ],
+            condition=IfCondition(
+                PythonExpression(
+                    [
+                        "'",
+                        start_wind_estimator,
+                        "'.lower() == 'true' and '",
+                        run_sim,
+                        "'.lower() == 'true'",
+                    ]
+                )
+            ),
+        )
+    )
+
+    actions.append(
+        Node(
+            package="parafoil_planner_v3",
             executable="planner_node",
             name="parafoil_planner_v3",
             output="screen",
@@ -176,6 +220,7 @@ def generate_launch_description() -> LaunchDescription:
                 {
                     "use_library": ParameterValue(use_library, value_type=bool),
                     "library_path": library_path,
+                    "wind.topic": wind_topic,
                 },
             ],
         )
@@ -196,7 +241,12 @@ def generate_launch_description() -> LaunchDescription:
             executable="guidance_node",
             name="parafoil_guidance_v3",
             output="screen",
-            parameters=[guidance_params],
+            parameters=[
+                guidance_params,
+                {
+                    "wind.topic": wind_topic,
+                },
+            ],
         )
     )
 
@@ -251,7 +301,7 @@ def generate_launch_description() -> LaunchDescription:
                 "/guidance_phase",
                 "/planner_status",
                 "/target",
-                "/wind_estimate",
+                wind_topic,
                 "/parafoil/state",
             ],
             output="screen",

@@ -31,6 +31,7 @@ class UpdateReason(Enum):
     FLARE_LOCKED = "flare_locked"
     EMERGENCY_RESELECT = "emergency_reselect"
     EMERGENCY_COOLDOWN = "emergency_cooldown"
+    UNREACHABLE_WIND = "unreachable_wind"
     MANUAL = "manual"
     DISABLED = "disabled"
     NO_CURRENT = "no_current_target"
@@ -101,6 +102,7 @@ class TargetUpdatePolicy:
         margin: float,
         selection: LandingSiteSelection,
         current_time: float,
+        reason: UpdateReason = UpdateReason.MANUAL,
     ) -> None:
         """强制设置目标（用于手动模式或初始化）"""
         with self._lock:
@@ -110,7 +112,7 @@ class TargetUpdatePolicy:
                 margin=margin,
                 selection=selection,
                 update_time=current_time,
-                reason=UpdateReason.MANUAL,
+                reason=reason,
             )
 
     @property

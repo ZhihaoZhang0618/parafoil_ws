@@ -2,8 +2,12 @@ parafoil_guidance_v3:
   ros__parameters:
     L1_distance: 28.0
     wind:
-      use_topic: false
+      use_topic: true
       default_ned: [0.0, 6.0, 0.0]
+      input_frame: "ned"
+      convention: "to"
+      timeout_s: 2.0
+      max_speed_mps: 0.0
     cruise:
       strong_wind_ratio: 0.95
       strong_wind_entry_mode: "adaptive"

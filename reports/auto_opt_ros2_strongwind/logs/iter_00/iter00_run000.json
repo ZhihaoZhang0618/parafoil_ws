@@ -1,0 +1,53 @@
+{
+  "metadata": {
+    "run_id": "iter00_run000",
+    "mode": "offline",
+    "timestamp": "2026-01-28T15:09:36Z",
+    "tags": [],
+    "schema_version": "v1"
+  },
+  "config": {
+    "scenario": {
+      "target_ned": [
+        0.0,
+        120.0,
+        -0.0
+      ]
+    },
+    "extra": {
+      "params": {
+        "L1_distance": 20.0,
+        "flare": {
+          "mode": "spec_full_brake",
+          "touchdown_brake_altitude_m": 0.2,
+          "flare_ramp_time": 0.5,
+          "flare_full_brake_duration_s": 3.0,
+          "flare_initial_brake": 0.2,
+          "flare_max_brake": 1.0
+        },
+        "lateral": {
+          "K_heading": 1.0,
+          "max_delta_a": 0.6,
+          "turn_rate_per_delta": 1.7,
+          "yaw_rate_max": 1.57,
+          "max_brake": 1.0
+        }
+      }
+    }
+  },
+  "timeline": [],
+  "planner_logs": [],
+  "controller_logs": [],
+  "state_history": [],
+  "control_history": [],
+  "events": [],
+  "metrics": {
+    "landing_error_m": 163.3407462102353,
+    "vertical_velocity_mps": 1.1316968866644563,
+    "touchdown_vertical_velocity_mps": 1.1316968866644563,
+    "time_s": 1769612165.463376,
+    "control_effort_mean": 0.32804055443381447,
+    "phase_durations_s": {},
+    "success": false
+  }
+}

@@ -1,0 +1,70 @@
+parafoil_planner_v3:
+  ros__parameters:
+    generation:
+      method: "gpm"            # template | gpm
+
+      # Strong-wind focused grid (covers wind_ratio ~ 0.8..>1 for typical polars).
+      wind_speeds: [6.0, 8.0, 10.0, 12.0]
+      wind_directions: [0, 45, 90, 135, 180, 225, 270, 315]
+      initial_altitudes: [20, 40, 60]
+      # Include short downwind distances where "slow drift" is needed, plus medium distances.
+      target_distances: [50, 80, 120, 150, 220, 300]
+      target_bearings: [0, 45, 90, 135, 180, 225, 270, 315]
+
+      # Keep types minimal to control runtime; expand if needed.
+      trajectory_types: ["DIRECT", "S_TURN"]
+
+      num_workers: "auto"
+
+      gpm:
+        method: "SLSQP"
+        solve_mode: "least_squares"
+        dynamics_mode: "mixed"       # simplified | 6dof | mixed
+        sixdof_ratio: 0.05
+        sixdof_seed: 7
+        num_nodes: 12
+        scheme: "LGL"
+        max_iterations: 250
+        tolerance: 1.0e-6
+        # NOTE: In strong wind, feasibility dominates; keep u_ref shaping light.
+        w_u_ref: 0.2
+
+        # Control shaping
+        delta_a_amp: 0.4
+        s_turn_cycles: 2.0
+        rollout_dt: 0.2
+
+        # Brake bounds
+        brake_min: 0.0
+        brake_max: 0.6
+        brake_fallback: 0.2
+
+        # Acceptance
+        max_violation_accept: 0.5
+
+        # Least-squares options
+        lsq_max_nfev: 200
+        lsq_w_dynamics: 1.0
+        lsq_w_boundary: 30.0
+        lsq_w_ineq: 30.0
+        u_ref_min: 0.001
+        u_ref_max: 1.0
+        lsq_x_scale: "jac"
+        lsq_diag_grad_max: 50
+        lsq_x0_bound_eps: 0.001
+
+        # Shape constraints (post-check)
+        shape_enforce: true
+        shape_turn_eps_deg: 3.0
+        direct_max_total_turn_deg: 120.0
+        direct_max_net_turn_deg: 90.0
+        s_turn_min_total_turn_deg: 90.0
+        s_turn_max_net_turn_deg: 90.0
+        s_turn_min_sign_changes: 1
+
+        # Strong-wind extensions
+        reachability_filter_enable: true
+        reachability_margin_mps: 0.2
+        reachability_min_progress_mps: 0.0
+        strong_wind_ratio_trigger: 0.8
+        strong_wind_init_yaw_mode: "req_air"   # none|req_air|upwind

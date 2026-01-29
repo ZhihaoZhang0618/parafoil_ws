@@ -67,6 +67,7 @@ setup(
             'library_server_node = parafoil_planner_v3.nodes.library_server_node:main',
             'mission_logger_node = parafoil_planner_v3.nodes.mission_logger_node:main',
             'safety_viz_node = parafoil_planner_v3.nodes.safety_viz_node:main',
+            'wind_estimator_node = parafoil_planner_v3.nodes.wind_estimator_node:main',
         ],
     },
 )

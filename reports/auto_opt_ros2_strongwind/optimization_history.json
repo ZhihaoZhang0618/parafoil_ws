@@ -1,0 +1,63 @@
+{
+  "entries": [
+    {
+      "iteration": 0,
+      "params": {
+        "L1_distance": 20.0,
+        "flare": {
+          "mode": "spec_full_brake",
+          "touchdown_brake_altitude_m": 0.2,
+          "flare_ramp_time": 0.5,
+          "flare_full_brake_duration_s": 3.0,
+          "flare_initial_brake": 0.2,
+          "flare_max_brake": 1.0
+        },
+        "lateral": {
+          "K_heading": 1.0,
+          "max_delta_a": 0.6,
+          "turn_rate_per_delta": 1.7,
+          "yaw_rate_max": 1.57,
+          "max_brake": 1.0
+        }
+      },
+      "summary": {
+        "n_runs": 1,
+        "success_rate": 0.0,
+        "landing_error": {
+          "mean": 163.3407462102353,
+          "p50": 163.3407462102353,
+          "p95": 163.3407462102353,
+          "max": 163.3407462102353
+        },
+        "touchdown_error": {
+          "mean": 163.3407462102353,
+          "p95": 163.3407462102353
+        },
+        "vertical_velocity_mps": {
+          "mean": 1.1316968866644563,
+          "p95": 1.1316968866644563
+        },
+        "touchdown_vertical_velocity_mps": {
+          "mean": 1.1316968866644563,
+          "p95": 1.1316968866644563
+        },
+        "mission_time_s": {
+          "mean": 1769612165.463376,
+          "p95": 1769612165.463376
+        },
+        "replan_count": {
+          "mean": 0.0,
+          "p95": 0.0
+        },
+        "control_effort_mean": {
+          "mean": 0.32804055443381447,
+          "p95": 0.32804055443381447
+        },
+        "phase_durations_s_mean": {}
+      },
+      "score": 163.3407462102353,
+      "constraints_ok": false,
+      "timestamp": 1769612976.922132
+    }
+  ]
+}

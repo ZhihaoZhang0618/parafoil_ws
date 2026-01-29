@@ -1,0 +1,93 @@
+[INFO] [launch]: All log files can be found below /home/aims/.ros/log/2026-01-27-14-05-25-382665-aims-WUJIE14XA-889195
+[INFO] [launch]: Default logging verbosity is set to INFO
+[INFO] [sim_node-1]: process started with pid [889215]
+[INFO] [wind_estimator_node-2]: process started with pid [889217]
+[INFO] [planner_node-3]: process started with pid [889219]
+[INFO] [guidance_node-4]: process started with pid [889221]
+[guidance_node-4] [INFO] [1769493925.646361733] [parafoil_guidance_v2]: parafoil_plannerv2 guidance started: L1=13.7m
+[planner_node-3] [INFO] [1769493925.657532131] [parafoil_planner_v2]: parafoil_plannerv2 started. Target=(150.0,50.0) freq=1.0Hz
+[wind_estimator_node-2] [INFO] [1769493925.658101340] [fake_wind_estimator]: fake_wind_estimator started
+[sim_node-1] [INFO] [1769493925.716262656] [parafoil_simulator]: Parafoil simulator started at 300.0m altitude
+[sim_node-1] [INFO] [1769493925.716544645] [parafoil_simulator]: Using rk4 integrator, ctl_dt=0.02s, dt_max=0.005s
+[planner_node-3] Traceback (most recent call last):
+[planner_node-3]   File "/home/aims/parafoil_ws/install/parafoil_plannerv2/lib/parafoil_plannerv2/planner_node", line 33, in <module>
+[planner_node-3]     sys.exit(load_entry_point('parafoil-plannerv2==0.1.0', 'console_scripts', 'planner_node')())
+[planner_node-3]   File "/home/aims/parafoil_ws/install/parafoil_plannerv2/lib/python3.10/site-packages/parafoil_plannerv2/planner_node.py", line 343, in main
+[planner_node-3]     rclpy.spin(node)
+[planner_node-3]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/__init__.py", line 229, in spin
+[planner_node-3]     executor.spin_once()
+[planner_node-3]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 751, in spin_once
+[planner_node-3]     self._spin_once_impl(timeout_sec)
+[planner_node-3]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 748, in _spin_once_impl
+[planner_node-3]     raise handler.exception()
+[planner_node-3]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/task.py", line 254, in __call__
+[planner_node-3]     self._handler.send(None)
+[planner_node-3]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 447, in handler
+[planner_node-3]     await call_coroutine(entity, arg)
+[planner_node-3]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 361, in _execute_timer
+[planner_node-3]     await await_or_execute(tmr.callback)
+[planner_node-3]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 107, in await_or_execute
+[planner_node-3]     return callback(*args)
+[planner_node-3]   File "/home/aims/parafoil_ws/install/parafoil_plannerv2/lib/python3.10/site-packages/parafoil_plannerv2/planner_node.py", line 240, in _plan_once
+[planner_node-3]     target = self._effective_target(target_nom, wind)
+[planner_node-3]   File "/home/aims/parafoil_ws/install/parafoil_plannerv2/lib/python3.10/site-packages/parafoil_plannerv2/planner_node.py", line 198, in _effective_target
+[planner_node-3]     tgt_dir = _unit(target - self._pos) if self._pos is not None else wind_dir
+[planner_node-3] NameError: name '_unit' is not defined. Did you mean: 'quit'?
+[ERROR] [planner_node-3]: process has died [pid 889219, exit code 1, cmd '/home/aims/parafoil_ws/install/parafoil_plannerv2/lib/parafoil_plannerv2/planner_node --ros-args -r __node:=parafoil_planner_v2 --params-file /tmp/launch_params_gf9derct'].
+[sim_node-1] [INFO] [1769493927.704722400] [parafoil_simulator]: t=2.0s | alt=298.1m | pos=(7.8, 4.1) | v=4.3m/s | yaw=9.6deg | brake=(0.48, 0.50)
+[sim_node-1] [INFO] [1769493929.704220674] [parafoil_simulator]: t=4.0s | alt=295.8m | pos=(14.3, 10.2) | v=4.8m/s | yaw=26.3deg | brake=(0.50, 0.48)
+[sim_node-1] [INFO] [1769493931.704691225] [parafoil_simulator]: t=6.0s | alt=293.4m | pos=(20.2, 17.7) | v=5.0m/s | yaw=35.7deg | brake=(0.50, 0.44)
+[sim_node-1] [INFO] [1769493933.704621360] [parafoil_simulator]: t=8.0s | alt=291.0m | pos=(25.7, 25.9) | v=5.1m/s | yaw=38.0deg | brake=(0.50, 0.48)
+[sim_node-1] [INFO] [1769493935.704497224] [parafoil_simulator]: t=10.0s | alt=288.4m | pos=(30.0, 35.8) | v=5.2m/s | yaw=39.1deg | brake=(0.50, 0.45)
+[sim_node-1] [INFO] [1769493937.704823012] [parafoil_simulator]: t=12.0s | alt=286.5m | pos=(36.4, 41.9) | v=4.0m/s | yaw=39.6deg | brake=(0.50, 0.50)
+[sim_node-1] [INFO] [1769493939.704830543] [parafoil_simulator]: t=14.0s | alt=280.4m | pos=(40.2, 48.6) | v=5.2m/s | yaw=38.0deg | brake=(0.50, 0.43)
+[sim_node-1] [INFO] [1769493941.705349655] [parafoil_simulator]: t=16.0s | alt=273.9m | pos=(44.2, 55.6) | v=5.2m/s | yaw=36.4deg | brake=(0.50, 0.44)
+[sim_node-1] [INFO] [1769493943.704510786] [parafoil_simulator]: t=18.0s | alt=267.4m | pos=(48.2, 62.5) | v=5.2m/s | yaw=36.7deg | brake=(0.50, 0.44)
+[sim_node-1] [INFO] [1769493945.704102967] [parafoil_simulator]: t=20.0s | alt=259.3m | pos=(52.1, 70.4) | v=5.6m/s | yaw=35.8deg | brake=(0.50, 0.44)
+[sim_node-1] [INFO] [1769493947.704093446] [parafoil_simulator]: t=22.0s | alt=252.8m | pos=(56.3, 77.3) | v=5.1m/s | yaw=33.4deg | brake=(0.50, 0.44)
+[sim_node-1] [INFO] [1769493949.704230057] [parafoil_simulator]: t=24.0s | alt=246.2m | pos=(60.5, 84.0) | v=5.1m/s | yaw=32.6deg | brake=(0.50, 0.41)
+[sim_node-1] [INFO] [1769493951.704639193] [parafoil_simulator]: t=26.0s | alt=240.3m | pos=(64.7, 90.9) | v=5.1m/s | yaw=29.4deg | brake=(0.50, 0.45)
+[sim_node-1] [INFO] [1769493953.704866306] [parafoil_simulator]: t=28.0s | alt=233.8m | pos=(69.0, 97.4) | v=5.1m/s | yaw=29.6deg | brake=(0.50, 0.41)
+[sim_node-1] [INFO] [1769493955.705152901] [parafoil_simulator]: t=30.0s | alt=227.2m | pos=(73.5, 103.7) | v=5.0m/s | yaw=25.4deg | brake=(0.50, 0.44)
+[sim_node-1] [INFO] [1769493957.705766430] [parafoil_simulator]: t=32.0s | alt=220.7m | pos=(78.0, 109.8) | v=5.0m/s | yaw=22.0deg | brake=(0.50, 0.40)
+[sim_node-1] [INFO] [1769493959.705773971] [parafoil_simulator]: t=34.0s | alt=214.1m | pos=(82.8, 115.3) | v=4.9m/s | yaw=15.5deg | brake=(0.50, 0.41)
+[sim_node-1] [INFO] [1769493961.705723904] [parafoil_simulator]: t=36.0s | alt=207.5m | pos=(87.7, 120.4) | v=4.8m/s | yaw=7.7deg | brake=(0.50, 0.41)
+[sim_node-1] [INFO] [1769493963.705126489] [parafoil_simulator]: t=38.0s | alt=200.7m | pos=(92.6, 124.2) | v=4.7m/s | yaw=-3.1deg | brake=(0.50, 0.44)
+[sim_node-1] [INFO] [1769493965.704426041] [parafoil_simulator]: t=40.0s | alt=194.1m | pos=(97.7, 127.7) | v=4.4m/s | yaw=-9.3deg | brake=(0.48, 0.32)
+[sim_node-1] [INFO] [1769493967.704718667] [parafoil_simulator]: t=42.0s | alt=187.5m | pos=(102.6, 130.3) | v=4.2m/s | yaw=-19.5deg | brake=(0.50, 0.44)
+[sim_node-1] [INFO] [1769493969.705020821] [parafoil_simulator]: t=44.0s | alt=180.9m | pos=(107.3, 132.4) | v=4.1m/s | yaw=-27.5deg | brake=(0.46, 0.34)
+[sim_node-1] [INFO] [1769493971.705104044] [parafoil_simulator]: t=46.0s | alt=174.3m | pos=(111.6, 133.6) | v=4.0m/s | yaw=-38.3deg | brake=(0.50, 0.44)
+[sim_node-1] [INFO] [1769493973.705167200] [parafoil_simulator]: t=48.0s | alt=167.7m | pos=(115.4, 134.1) | v=3.8m/s | yaw=-44.8deg | brake=(0.50, 0.45)
+[sim_node-1] [INFO] [1769493975.704474326] [parafoil_simulator]: t=50.0s | alt=161.1m | pos=(118.9, 134.3) | v=3.7m/s | yaw=-44.3deg | brake=(0.50, 0.48)
+[sim_node-1] [INFO] [1769493977.704716868] [parafoil_simulator]: t=52.0s | alt=154.6m | pos=(122.8, 135.3) | v=3.9m/s | yaw=-32.6deg | brake=(0.50, 0.40)
+[sim_node-1] [INFO] [1769493979.705343251] [parafoil_simulator]: t=54.0s | alt=147.7m | pos=(127.0, 136.7) | v=4.4m/s | yaw=-39.9deg | brake=(0.46, 0.50)
+[sim_node-1] [INFO] [1769493981.704617977] [parafoil_simulator]: t=56.0s | alt=140.4m | pos=(130.7, 138.3) | v=4.1m/s | yaw=-34.8deg | brake=(0.07, 0.00)
+[sim_node-1] [INFO] [1769493983.705223200] [parafoil_simulator]: t=58.0s | alt=133.5m | pos=(135.2, 138.5) | v=4.0m/s | yaw=-45.1deg | brake=(0.15, 0.01)
+[sim_node-1] [INFO] [1769493985.704974620] [parafoil_simulator]: t=60.0s | alt=127.4m | pos=(139.5, 140.2) | v=3.8m/s | yaw=-44.1deg | brake=(0.05, 0.00)
+[sim_node-1] [INFO] [1769493987.704734747] [parafoil_simulator]: t=62.0s | alt=120.7m | pos=(143.4, 140.5) | v=3.8m/s | yaw=-50.8deg | brake=(0.37, 0.27)
+[sim_node-1] [INFO] [1769493989.705284837] [parafoil_simulator]: t=64.0s | alt=114.0m | pos=(146.3, 139.9) | v=3.6m/s | yaw=-62.6deg | brake=(0.14, 0.06)
+[sim_node-1] [INFO] [1769493991.704080783] [parafoil_simulator]: t=66.0s | alt=107.3m | pos=(148.5, 138.9) | v=3.5m/s | yaw=-65.9deg | brake=(0.01, 0.00)
+[sim_node-1] [INFO] [1769493993.704706686] [parafoil_simulator]: t=68.0s | alt=100.5m | pos=(150.9, 138.0) | v=3.6m/s | yaw=-66.5deg | brake=(0.18, 0.10)
+[sim_node-1] [INFO] [1769493995.704761876] [parafoil_simulator]: t=70.0s | alt=93.7m | pos=(152.7, 136.6) | v=3.5m/s | yaw=-75.0deg | brake=(0.22, 0.18)
+[sim_node-1] [INFO] [1769493997.705139643] [parafoil_simulator]: t=72.0s | alt=87.0m | pos=(153.8, 135.3) | v=3.5m/s | yaw=-80.4deg | brake=(0.48, 0.49)
+[sim_node-1] [INFO] [1769493999.705201797] [parafoil_simulator]: t=74.0s | alt=80.2m | pos=(154.8, 133.8) | v=3.5m/s | yaw=-80.2deg | brake=(0.02, 0.00)
+[sim_node-1] [INFO] [1769494001.704750797] [parafoil_simulator]: t=76.0s | alt=73.4m | pos=(155.6, 132.0) | v=3.5m/s | yaw=-83.6deg | brake=(0.28, 0.24)
+[sim_node-1] [INFO] [1769494003.704748169] [parafoil_simulator]: t=78.0s | alt=66.5m | pos=(155.9, 130.2) | v=3.7m/s | yaw=-90.5deg | brake=(0.16, 0.09)
+[sim_node-1] [INFO] [1769494005.704922283] [parafoil_simulator]: t=80.0s | alt=59.6m | pos=(155.3, 128.2) | v=3.6m/s | yaw=-97.6deg | brake=(0.50, 0.49)
+[sim_node-1] [INFO] [1769494007.704671339] [parafoil_simulator]: t=82.0s | alt=53.1m | pos=(154.5, 127.0) | v=3.4m/s | yaw=-97.3deg | brake=(0.48, 0.50)
+[sim_node-1] [INFO] [1769494009.705209888] [parafoil_simulator]: t=84.0s | alt=46.6m | pos=(154.0, 126.0) | v=3.3m/s | yaw=-95.5deg | brake=(0.50, 0.50)
+[sim_node-1] [INFO] [1769494011.704640415] [parafoil_simulator]: t=86.0s | alt=40.0m | pos=(153.5, 125.1) | v=3.3m/s | yaw=-97.4deg | brake=(0.50, 0.48)
+[sim_node-1] [INFO] [1769494013.704745319] [parafoil_simulator]: t=88.0s | alt=33.5m | pos=(152.7, 124.3) | v=3.3m/s | yaw=-101.3deg | brake=(0.50, 0.50)
+[sim_node-1] [INFO] [1769494015.705020593] [parafoil_simulator]: t=90.0s | alt=27.0m | pos=(151.6, 123.5) | v=3.3m/s | yaw=-104.3deg | brake=(0.50, 0.50)
+[sim_node-1] [INFO] [1769494017.704736167] [parafoil_simulator]: t=92.0s | alt=20.5m | pos=(150.2, 122.8) | v=3.4m/s | yaw=-108.3deg | brake=(0.50, 0.50)
+[sim_node-1] [INFO] [1769494019.704985171] [parafoil_simulator]: t=94.0s | alt=14.0m | pos=(148.5, 122.2) | v=3.4m/s | yaw=-112.1deg | brake=(0.49, 0.50)
+[sim_node-1] [INFO] [1769494021.705031586] [parafoil_simulator]: t=96.0s | alt=7.5m | pos=(146.5, 121.6) | v=3.4m/s | yaw=-114.1deg | brake=(0.47, 0.50)
+[sim_node-1] [INFO] [1769494023.704964116] [parafoil_simulator]: t=98.0s | alt=1.0m | pos=(144.5, 121.1) | v=3.4m/s | yaw=-114.7deg | brake=(0.49, 0.50)
+[sim_node-1] [INFO] [1769494024.021690621] [parafoil_simulator]: ==================================================
+[sim_node-1] [INFO] [1769494024.022291649] [parafoil_simulator]: LANDING DETECTED
+[sim_node-1] [INFO] [1769494024.022777431] [parafoil_simulator]: Flight time: 98.3 s
+[sim_node-1] [INFO] [1769494024.023044533] [parafoil_simulator]: Landing position: N=144.2m, E=121.1m
+[sim_node-1] [INFO] [1769494024.023237084] [parafoil_simulator]: Distance from origin: 188.3 m
+[sim_node-1] [INFO] [1769494024.023432201] [parafoil_simulator]: Total simulation steps: 4915
+[sim_node-1] [INFO] [1769494024.023622298] [parafoil_simulator]: ==================================================
+[sim_node-1] [INFO] [1769494024.023819298] [parafoil_simulator]: Simulation complete. Shutting down.

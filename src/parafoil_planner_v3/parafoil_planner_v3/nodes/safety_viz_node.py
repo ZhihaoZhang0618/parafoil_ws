@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-import json
 from typing import Iterable, Optional
 
 import numpy as np
@@ -16,6 +15,15 @@ from nav_msgs.msg import Odometry
 from parafoil_planner_v3.environment import NoFlyCircle, NoFlyPolygon, load_no_fly_polygons
 from parafoil_planner_v3.dynamics.aerodynamics import PolarTable
 from parafoil_planner_v3.landing_site_selector import RiskGrid
+from parafoil_planner_v3.utils.wind_utils import (
+    WindConvention,
+    WindInputFrame,
+    clip_wind_xy,
+    frame_from_frame_id,
+    parse_wind_convention,
+    parse_wind_input_frame,
+    to_ned_wind_to,
+)
 
 
 def _ned_to_enu_xyz(p_ned: np.ndarray) -> tuple[float, float, float]:
@@ -102,6 +110,11 @@ class SafetyVizNode(Node):
         self.declare_parameter("reachability.fill_color", [0.1, 0.8, 1.0])
         # Use string to allow launch substitution; parsed in _wind_estimate.
         self.declare_parameter("wind_default_ned", "[0.0, 2.0, 0.0]")
+        # /wind_estimate conversion -> internal standard: NED + wind-to
+        self.declare_parameter("wind.input_frame", "ned")  # ned|enu|auto
+        self.declare_parameter("wind.convention", "to")  # to|from
+        self.declare_parameter("wind.timeout_s", 2.0)
+        self.declare_parameter("wind.max_speed_mps", 0.0)  # 0 disables clipping
 
         self._frame_id = str(self.get_parameter("frame_id").value)
 
@@ -125,7 +138,9 @@ class SafetyVizNode(Node):
         self._publisher = self.create_publisher(MarkerArray, "/safety_viz", 10)
 
         self._last_odom: Optional[Odometry] = None
-        self._last_wind: Optional[np.ndarray] = None
+        self._last_wind_ned_to: Optional[np.ndarray] = None
+        self._wind_recv_time_s: Optional[float] = None
+        self._wind_frame_id: str = ""
         self._polar = PolarTable()
 
         self.create_subscription(Odometry, "/parafoil/odom", self._on_odom, 10)
@@ -140,7 +155,39 @@ class SafetyVizNode(Node):
         self._last_odom = msg
 
     def _on_wind(self, msg: Vector3Stamped) -> None:
-        self._last_wind = np.array([msg.vector.x, msg.vector.y, msg.vector.z], dtype=float)
+        raw = np.array([msg.vector.x, msg.vector.y, msg.vector.z], dtype=float)
+        now_s = self.get_clock().now().nanoseconds * 1e-9
+
+        input_frame_raw = str(self.get_parameter("wind.input_frame").value)
+        convention_raw = str(self.get_parameter("wind.convention").value)
+        try:
+            input_frame = parse_wind_input_frame(input_frame_raw)
+        except ValueError as e:
+            self.get_logger().error(str(e))
+            input_frame = WindInputFrame.NED
+        try:
+            convention = parse_wind_convention(convention_raw)
+        except ValueError as e:
+            self.get_logger().error(str(e))
+            convention = WindConvention.TO
+
+        input_frame_used = input_frame
+        if input_frame == WindInputFrame.AUTO:
+            guessed = frame_from_frame_id(msg.header.frame_id)
+            input_frame_used = guessed if guessed is not None else WindInputFrame.NED
+
+        try:
+            wind_ned = to_ned_wind_to(raw, input_frame=input_frame_used, convention=convention)
+        except Exception as e:
+            self.get_logger().error(f"Failed to convert wind estimate: {e}")
+            return
+
+        max_speed_mps = float(self.get_parameter("wind.max_speed_mps").value)
+        wind_ned, _clipped = clip_wind_xy(wind_ned, max_speed_mps=max_speed_mps)
+
+        self._last_wind_ned_to = wind_ned
+        self._wind_recv_time_s = now_s
+        self._wind_frame_id = str(msg.header.frame_id)
 
     def _make_cylinder_marker(self, idx: int, center_n: float, center_e: float, radius: float, color: tuple[float, float, float]) -> Marker:
         m = Marker()
@@ -240,8 +287,12 @@ class SafetyVizNode(Node):
         return m
 
     def _wind_estimate(self) -> np.ndarray:
-        if self._last_wind is not None:
-            return self._last_wind
+        now_s = self.get_clock().now().nanoseconds * 1e-9
+        timeout_s = float(self.get_parameter("wind.timeout_s").value)
+        if self._last_wind_ned_to is not None and self._wind_recv_time_s is not None:
+            age_s = float(now_s - self._wind_recv_time_s)
+            if timeout_s <= 0.0 or age_s <= timeout_s:
+                return self._last_wind_ned_to
         default_raw = self.get_parameter("wind_default_ned").value
         if isinstance(default_raw, str):
             try:

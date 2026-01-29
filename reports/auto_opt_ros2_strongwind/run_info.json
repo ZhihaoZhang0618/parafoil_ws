@@ -1,0 +1,8 @@
+{
+  "mode": "ros2",
+  "iterations": 1,
+  "runs_per_iteration": 0,
+  "parallel": 4,
+  "record_history": false,
+  "record_logs": true
+}

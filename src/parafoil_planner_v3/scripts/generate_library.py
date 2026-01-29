@@ -166,6 +166,15 @@ def main() -> None:
         lsq_w_dynamics=float(gpm.get("lsq_w_dynamics", 1.0)),
         lsq_w_boundary=float(gpm.get("lsq_w_boundary", 10.0)),
         lsq_w_ineq=float(gpm.get("lsq_w_ineq", 10.0)),
+        lsq_nudge_eps_abs=float(gpm.get("lsq_nudge_eps_abs", 1e-4)),
+        lsq_nudge_eps_rel=float(gpm.get("lsq_nudge_eps_rel", 1e-6)),
+        lsq_diag=str(gpm.get("lsq_diag", "on_warn")),
+        lsq_diag_max_reports=int(gpm.get("lsq_diag_max_reports", 20)),
+        u_ref_min=float(gpm.get("u_ref_min", 0.0)),
+        u_ref_max=float(gpm.get("u_ref_max", 1.0)),
+        lsq_x_scale=str(gpm.get("lsq_x_scale", "jac")),
+        lsq_diag_grad_max=int(gpm.get("lsq_diag_grad_max", 50)),
+        lsq_x0_bound_eps=float(gpm.get("lsq_x0_bound_eps", 1e-3)),
         shape_enforce=bool(gpm.get("shape_enforce", True)),
         shape_turn_eps_deg=float(gpm.get("shape_turn_eps_deg", 3.0)),
         direct_max_total_turn_deg=float(gpm.get("direct_max_total_turn_deg", 60.0)),
@@ -179,6 +188,11 @@ def main() -> None:
         racetrack_min_turn_fraction=float(gpm.get("racetrack_min_turn_fraction", 0.75)),
         spiral_min_turns=float(gpm.get("spiral_min_turns", 1.0)),
         spiral_min_turn_fraction=float(gpm.get("spiral_min_turn_fraction", 0.9)),
+        reachability_filter_enable=bool(gpm.get("reachability_filter_enable", False)),
+        reachability_margin_mps=float(gpm.get("reachability_margin_mps", 0.2)),
+        reachability_min_progress_mps=float(gpm.get("reachability_min_progress_mps", 0.0)),
+        strong_wind_ratio_trigger=float(gpm.get("strong_wind_ratio_trigger", 0.8)),
+        strong_wind_init_yaw_mode=str(gpm.get("strong_wind_init_yaw_mode", "none")),
     )
 
     task_count = len(scenario_cfg.wind_speeds) * len(scenario_cfg.wind_directions_deg) * len(scenario_cfg.initial_altitudes_m) * len(scenario_cfg.target_distances_m) * len(scenario_cfg.target_bearings_deg) * len(types)

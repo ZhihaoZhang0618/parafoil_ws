@@ -28,3 +28,8 @@ The layout is flat to keep ROS2 install paths stable. Use the grouped index belo
 ## Scenarios / datasets
 - `batch_scenarios.yaml` — batch scenario definitions
 - `demo_risk_grid.npz` — demo risk grid for safety-first landing selection
+- `shenzhen_like_risk_grid_400x400.npz` — larger synthetic urban-like risk grid (400x400, 1m) for safety demos
+- `shenzhen_like_no_fly_polygons.json` — matching no-fly polygons (office/residential/powerlines), NED (north,east) meters
+- `shenzhen_like_risk_grid_800x800.npz` — larger coverage variant (400x400 @ 2m, ~800m×800m)
+- `shenzhen_like_no_fly_polygons_800x800.json` — matching no-fly polygons for the 800×800 scene
+- `planner_params_safety_shenzhen_like.yaml` — ready-to-run planner params wired to the above files
