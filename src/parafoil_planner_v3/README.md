@@ -112,15 +112,20 @@ ros2 service call /set_target parafoil_msgs/srv/SetTarget \
 ### 生成轨迹库（可选）
 
 ```bash
-# coarse library (faster, wider coverage)
+# coarse library (simplified, faster, wider coverage)
 python3 $(ros2 pkg prefix parafoil_planner_v3)/share/parafoil_planner_v3/scripts/generate_library.py \
   --config $(ros2 pkg prefix parafoil_planner_v3)/share/parafoil_planner_v3/config/library_params.yaml \
   --output /tmp/parafoil_library_coarse.pkl
 
-# fine library (denser, higher fidelity)
+# fine library (dense grid, simplified dynamics)
 python3 $(ros2 pkg prefix parafoil_planner_v3)/share/parafoil_planner_v3/scripts/generate_library.py \
   --config $(ros2 pkg prefix parafoil_planner_v3)/share/parafoil_planner_v3/config/library_params_full.yaml \
   --output /tmp/parafoil_library_fine.pkl
+
+# optional 6-DOF validation library (small grid, extreme conditions)
+python3 $(ros2 pkg prefix parafoil_planner_v3)/share/parafoil_planner_v3/scripts/generate_library.py \
+  --config $(ros2 pkg prefix parafoil_planner_v3)/share/parafoil_planner_v3/config/library_params_6dof_validation.yaml \
+  --output /tmp/parafoil_library_6dof_validation.pkl
 ```
 
 为避免多进程 + BLAS 线程过度抢占导致变慢，建议在生成时限制数值库线程：

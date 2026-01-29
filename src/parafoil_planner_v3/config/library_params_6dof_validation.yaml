@@ -1,0 +1,43 @@
+parafoil_planner_v3:
+  ros__parameters:
+    generation:
+      method: "gpm"            # template | gpm
+      # Small 6-DOF validation grid (extreme conditions only).
+      wind_speeds: [8.0, 10.0, 12.0]
+      wind_directions: [0, 90, 180, 270]
+      initial_altitudes: [30, 60, 100]
+      target_distances: [200, 260, 320, 350]
+      target_bearings: [0, 90, 180, 270]
+      trajectory_types: ["DIRECT", "S_TURN"]
+
+      num_workers: "auto"
+
+      gpm:
+        method: "SLSQP"
+        solve_mode: "least_squares"
+        dynamics_mode: "6dof"  # high-fidelity validation
+        num_nodes: 16
+        scheme: "LGL"
+        max_iterations: 300
+        tolerance: 1.0e-6
+        w_u_ref: 2.0
+        delta_a_amp: 0.4
+        s_turn_cycles: 2.0
+        spiral_delta_a_sign: 1.0
+        rollout_dt: 0.2
+        brake_min: 0.0
+        brake_max: 0.6
+        brake_fallback: 0.2
+        max_violation_accept: 0.5
+        lsq_max_nfev: 60
+        lsq_w_dynamics: 1.0
+        lsq_w_boundary: 10.0
+        lsq_w_ineq: 10.0
+        # Shape constraints (post-check)
+        shape_enforce: true
+        shape_turn_eps_deg: 3.0
+        direct_max_total_turn_deg: 60.0
+        direct_max_net_turn_deg: 45.0
+        s_turn_min_total_turn_deg: 90.0
+        s_turn_max_net_turn_deg: 45.0
+        s_turn_min_sign_changes: 1
