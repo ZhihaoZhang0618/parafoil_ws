@@ -1,0 +1,21 @@
+version: '3.8'
+
+services:
+  parafoil:
+    build:
+      context: .
+      args:
+        ROOT_PASSWORD: root
+    image: parafoil:latest
+    container_name: parafoil
+    # The original script ran the container with host networking and /dev mounted
+    network_mode: "host"
+    privileged: true
+    volumes:
+      - /dev:/dev
+      - ./:/home/ros/parafoil_ws:cached
+    # If you don't want host networking, comment the network_mode above and
+    # use the ports mapping below (host 2222 -> container 22)
+    # ports:
+    #   - "2222:22"
+    restart: unless-stopped
