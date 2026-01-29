@@ -6,6 +6,7 @@ log/
 # Bag files (usually large)
 bags/
 test_bags/
+test_runs/
 
 # IDE
 .vscode/
