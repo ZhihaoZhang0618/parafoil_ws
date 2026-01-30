@@ -1,0 +1,37 @@
+parafoil_planner_v3:
+  ros__parameters:
+    # Strong-wind library smoke test (ROS2 runtime).
+    #
+    # Purpose: verify that the generated strong-wind libraries can be loaded and
+    # that the planner returns a library trajectory (instead of falling back to
+    # online GPM / direct path).
+    #
+    # Note: we disable headwind aimpoint planning here to avoid planning toward
+    # an internal "aimpoint" that may be behind the vehicle in strong tailwind
+    # cases (which can trigger skip_library + GPM fallback).
+
+    planner_rate_hz: 1.0
+
+    use_library: true
+    library_path: "/tmp/parafoil_library_strongwind_headwind.pkl"
+
+    planning:
+      dynamics_mode: "simplified"
+
+    library:
+      coarse_path: "/tmp/parafoil_library_strongwind_headwind_coarse.pkl"
+      fine_path: "/tmp/parafoil_library_strongwind_headwind.pkl"
+      coarse_k_neighbors: 5
+      fine_k_neighbors: 5
+      require_coarse_match: false
+      fallback_to_coarse: true
+
+      # Keep loose gates for smoke testing.
+      skip_if_unreachable_wind: true
+      min_track_ground_speed_mps: 0.2
+      enable_gpm_fine_tuning: true
+      fine_tuning_trigger_m: 10.0
+      terminal_pos_tol_m: 30.0
+
+    headwind:
+      enable: false

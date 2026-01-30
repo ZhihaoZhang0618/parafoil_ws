@@ -485,6 +485,13 @@ class PlannerCore:
     ) -> tuple[bool, str]:
         if not traj.waypoints:
             return False, "empty"
+        # Numeric tolerances: libraries (and online solvers) can sit extremely close to
+        # hard bounds due to floating-point/integration errors. We allow a tiny margin
+        # here so that "almost-on-the-bound" trajectories are still usable.
+        eps_vh = 1e-3  # m/s
+        eps_roll = float(np.deg2rad(0.5))  # rad
+        eps_yaw_rate = float(np.deg2rad(0.5))  # rad/s
+        eps_control_rate = 1e-3  # 1/s
         # Terminal position tolerance
         final = traj.waypoints[-1].state
         terminal_err = float(np.linalg.norm(final.position_xy - target.position_xy))
@@ -496,13 +503,13 @@ class PlannerCore:
             st = wp.state
             v_xy = st.v_I[:2]
             Vh = float(np.linalg.norm(v_xy))
-            if Vh < float(self.config.Vh_min) or Vh > float(self.config.Vh_max):
+            if Vh < float(self.config.Vh_min) - eps_vh or Vh > float(self.config.Vh_max) + eps_vh:
                 return False, "Vh_out_of_bounds"
             roll, _, _ = quat_to_rpy(st.q_IB)
-            if abs(float(roll)) > float(np.deg2rad(self.config.roll_max_deg)):
+            if abs(float(roll)) > float(np.deg2rad(self.config.roll_max_deg)) + eps_roll:
                 return False, "roll_out_of_bounds"
             yaw_rate = float(st.w_B[2])
-            if abs(yaw_rate) > float(np.deg2rad(self.config.yaw_rate_max_deg)):
+            if abs(yaw_rate) > float(np.deg2rad(self.config.yaw_rate_max_deg)) + eps_yaw_rate:
                 return False, "yaw_rate_out_of_bounds"
 
             if terrain is not None:
@@ -545,7 +552,7 @@ class PlannerCore:
                     if dt > 1e-6:
                         rate_l = abs((ctrl.delta_L - last.delta_L) / dt)
                         rate_r = abs((ctrl.delta_R - last.delta_R) / dt)
-                        if rate_l > rate_limit or rate_r > rate_limit:
+                        if rate_l > rate_limit + eps_control_rate or rate_r > rate_limit + eps_control_rate:
                             return False, "control_rate"
                 last = ctrl
 
@@ -730,6 +737,16 @@ class PlannerCore:
         dist = float(np.linalg.norm(target.position_xy - state.position_xy))
         Vh = max(state.speed_horizontal, 1.0)
         tf_guess = max(tf_guess, dist / Vh)
+        # Ensure we also allocate enough time to lose altitude down to the target.
+        # Without this, the NLP often starts from an infeasible time horizon
+        # (e.g. 100m altitude with ~1m/s sink cannot "touch down" in 30s).
+        try:
+            _, sink = PolarTable().interpolate(float(self.config.fallback_brake))
+            alt_drop = float(max(state.altitude - target.altitude, 0.0))
+            if float(sink) > 1e-3 and alt_drop > 1e-6:
+                tf_guess = max(tf_guess, alt_drop / float(sink))
+        except Exception:  # pragma: no cover - defensive
+            pass
 
         warm = self.solver.last_solution_z if self.config.enable_warm_start else None
         terrain = self._load_terrain()

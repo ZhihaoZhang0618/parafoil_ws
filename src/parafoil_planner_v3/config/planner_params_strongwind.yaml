@@ -2,7 +2,8 @@ parafoil_planner_v3:
   ros__parameters:
     # Planner core
     use_library: true
-    library_path: "/tmp/parafoil_library.pkl"
+    # Fine library path (kept for backward-compat; used when library.fine_path is empty).
+    library_path: "/tmp/parafoil_library_strongwind_headwind.pkl"
     planner_rate_hz: 1.0
 
     # Wind (fallback when /wind_estimate is absent)
@@ -24,6 +25,10 @@ parafoil_planner_v3:
 
     # Library selection (online)
     library:
+      # Two-stage matching (optional): coarse -> fine.
+      # If fine_path is empty, PlannerNode will fall back to library_path.
+      coarse_path: "/tmp/parafoil_library_strongwind_headwind_coarse.pkl"
+      fine_path: "/tmp/parafoil_library_strongwind_headwind.pkl"
       k_neighbors: 5
       skip_if_unreachable_wind: true
       min_track_ground_speed_mps: 0.2

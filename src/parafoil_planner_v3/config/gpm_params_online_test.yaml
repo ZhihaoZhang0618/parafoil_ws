@@ -1,0 +1,48 @@
+parafoil_planner_v3:
+  ros__parameters:
+    # Online GPM test settings:
+    # - Add a wall-time budget to avoid long hangs during interactive tests.
+    solver:
+      # NOTE: for online usage, constrained-SLSQP is often fragile on this
+      # highly constrained transcription; "least_squares" is more robust.
+      method: "least_squares"
+      maxiter: 80
+      ftol: 1.0e-4
+      max_solve_time_s: 8.0
+
+    weights:
+      w_terminal_pos: 50.0
+      w_terminal_vel: 1.0
+      w_running_u: 0.05
+      w_running_du: 0.01
+      w_running_w: 0.0
+      w_running_wdot: 0.0
+      w_running_energy: 0.0
+
+    constraints:
+      tf_min: 1.0
+      tf_max: 120.0
+      delta_rate_max: 3.0
+      Vh_min: 0.5
+      Vh_max: 8.0
+      roll_max_deg: 60.0
+      yaw_rate_max_deg: 120.0
+
+      # Optional: enforce terminal ground-track heading into the wind.
+      terminal_upwind_heading: false
+      terminal_heading_tol_deg: 5.0
+
+      # Optional: terrain and no-fly zones (planner-frame NED XY, target-centered in OFFLINE).
+      terrain_type: "flat"           # flat|plane
+      terrain_height0_m: 0.0
+      terrain_slope_n: 0.0
+      terrain_slope_e: 0.0
+      terrain_clearance_m: 0.0
+      terrain_file: ""              # required if terrain_type=grid
+
+      # JSON string: [[center_n, center_e, radius_m, clearance_m], ...]
+      no_fly_circles: "[]"
+      # JSON string: [[[n,e],[n,e],...], ...] or [{"vertices":[...], "clearance_m":1.0}, ...]
+      no_fly_polygons: "[]"
+      # Optional: yaml/json/geojson file containing polygons
+      no_fly_polygons_file: ""

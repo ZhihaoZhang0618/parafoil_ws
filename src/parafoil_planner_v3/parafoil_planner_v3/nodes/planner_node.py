@@ -27,6 +27,7 @@ from parafoil_dynamics.params import Params
 
 from parafoil_planner_v3.dynamics.aerodynamics import PolarTable
 from parafoil_planner_v3.dynamics.parafoil_6dof import IntegratorConfig, SixDOFDynamics
+from parafoil_planner_v3.dynamics.simplified_model import KinematicYawGlideDynamics
 from parafoil_planner_v3.environment import NoFlyPolygon
 from parafoil_planner_v3.landing_site_selector import (
     LandingSiteSelector,
@@ -194,6 +195,10 @@ class PlannerNode(Node):
         self.declare_parameter("dynamics_params_yaml", "")
         self.declare_parameter("integrator.method", "rk4")
         self.declare_parameter("integrator.dt_max", 0.01)
+        # Planning dynamics model used by PlannerCore:
+        # - "6dof" (default): match simulator physics, but slower for online GPM.
+        # - "simplified": kinematic polar-based model; much faster/more robust for online GPM.
+        self.declare_parameter("planning.dynamics_mode", "6dof")
 
         self.declare_parameter("wind.use_topic", True)
         self.declare_parameter("wind.topic", "/wind_estimate")
@@ -251,7 +256,13 @@ class PlannerNode(Node):
 
         integrator_method = parse_integrator_type(str(self.get_parameter("integrator.method").value))
         integrator_cfg = IntegratorConfig(method=integrator_method, dt_max=float(self.get_parameter("integrator.dt_max").value))
-        dynamics = SixDOFDynamics(params=params, integrator=integrator_cfg)
+        dyn_mode = str(self.get_parameter("planning.dynamics_mode").value).strip().lower()
+        if dyn_mode in {"simplified", "simple", "kinematic"}:
+            dynamics = KinematicYawGlideDynamics()
+            self.get_logger().info("Planner dynamics: simplified (KinematicYawGlideDynamics)")
+        else:
+            dynamics = SixDOFDynamics(params=params, integrator=integrator_cfg)
+            self.get_logger().info("Planner dynamics: 6dof (SixDOFDynamics)")
 
         planner_cfg = PlannerConfig(
             gpm_num_nodes=int(self.get_parameter("gpm.num_nodes").value),

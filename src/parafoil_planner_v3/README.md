@@ -196,6 +196,33 @@ python3 $(ros2 pkg prefix parafoil_planner_v3)/share/parafoil_planner_v3/scripts
   --config $(ros2 pkg prefix parafoil_planner_v3)/share/parafoil_planner_v3/config/library_params_full.yaml \
   --output /tmp/parafoil_library_fine.pkl
 
+# strong-wind / headwind libraries (coarse+fine, covers wind_ratio ~ 0.8..>1)
+python3 $(ros2 pkg prefix parafoil_planner_v3)/share/parafoil_planner_v3/scripts/generate_library.py \
+  --config $(ros2 pkg prefix parafoil_planner_v3)/share/parafoil_planner_v3/config/library_params_strongwind_headwind_coarse.yaml \
+  --output /tmp/parafoil_library_strongwind_headwind_coarse.pkl
+
+python3 $(ros2 pkg prefix parafoil_planner_v3)/share/parafoil_planner_v3/scripts/generate_library.py \
+  --config $(ros2 pkg prefix parafoil_planner_v3)/share/parafoil_planner_v3/config/library_params_strongwind_headwind.yaml \
+  --output /tmp/parafoil_library_strongwind_headwind.pkl
+
+# strong-wind library smoke test (ROS2 runtime)
+#
+# If your libraries are generated under /home/aims/parafoil_ws (workspace root),
+# you can symlink them into /tmp to match the default planner configs:
+ln -sf /home/aims/parafoil_ws/parafoil_library_strongwind_headwind_coarse.pkl /tmp/parafoil_library_strongwind_headwind_coarse.pkl
+ln -sf /home/aims/parafoil_ws/parafoil_library_strongwind_headwind.pkl /tmp/parafoil_library_strongwind_headwind.pkl
+
+ros2 launch parafoil_planner_v3 e2e_verification.launch.py \
+  planner_params:=/home/aims/parafoil_ws/src/parafoil_planner_v3/config/planner_params_strongwind_library_test.yaml \
+  gpm_params:=/home/aims/parafoil_ws/src/parafoil_planner_v3/config/gpm_params_online_test.yaml \
+  use_library:=true start_library_server:=false \
+  initial_altitude:=40 \
+  wind_steady_n:=0.0 wind_steady_e:=10.0 wind_steady_d:=0.0 \
+  target_delay_s:=0.1 target_enu_x:=220.0 target_enu_y:=0.0 target_enu_z:=0.0
+
+# Expect `msg=library:*` in /planner_status:
+ros2 topic echo /planner_status --once --full-length
+
 # optional 6-DOF validation library (small grid, extreme conditions)
 python3 $(ros2 pkg prefix parafoil_planner_v3)/share/parafoil_planner_v3/scripts/generate_library.py \
   --config $(ros2 pkg prefix parafoil_planner_v3)/share/parafoil_planner_v3/config/library_params_6dof_validation.yaml \
@@ -367,6 +394,23 @@ python3 $(ros2 pkg prefix parafoil_planner_v3)/share/parafoil_planner_v3/scripts
 
 # 安全功能验证
 python3 $(ros2 pkg prefix parafoil_planner_v3)/share/parafoil_planner_v3/scripts/verify_safety.py --runs 50
+```
+
+### 在线 GPM 快速验证（不依赖轨迹库）
+
+用于在**不生成轨迹库**的情况下，先确认规划器在线 GPM 能稳定输出 `/planned_trajectory`（强风/顶风策略也会走到这条链路）。
+
+```bash
+ros2 launch parafoil_planner_v3 e2e_verification.launch.py \
+  use_library:=false start_library_server:=false rviz:=false record_bag:=false \
+  planner_params:=/home/aims/parafoil_ws/src/parafoil_planner_v3/config/planner_params_online_gpm_test.yaml \
+  gpm_params:=/home/aims/parafoil_ws/src/parafoil_planner_v3/config/gpm_params_online_test.yaml \
+  wind_enable_steady:=true wind_steady_n:=0.0 wind_steady_e:=4.0 wind_steady_d:=0.0 \
+  target_enu_x:=100.0 target_enu_y:=0.0 target_enu_z:=0.0
+
+# 观察一次规划状态与轨迹（`/planner_status` 是一行字符串）
+ros2 topic echo --once /planner_status
+ros2 topic echo --once /planned_trajectory
 ```
 
 更多脚本见 `src/parafoil_planner_v3/scripts/`。

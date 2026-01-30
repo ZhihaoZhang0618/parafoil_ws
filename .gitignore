@@ -22,6 +22,8 @@ __pycache__/
 
 # ROS generated
 *.bag
+*.pkl
+*.pickle
 refs/9dof_reference/
 parafoil_planner/
 parafoil_plannerv2/

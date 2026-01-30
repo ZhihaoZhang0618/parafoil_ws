@@ -310,51 +310,121 @@ class GPMSolver:
             self._terrain = FlatTerrain(height0_m=0.0)
 
         try:
-            constraints = [
-                {"type": "eq", "fun": self._constraint_dynamics},
-                {"type": "eq", "fun": self._constraint_boundary, "args": (x0, p_target)},
-                {"type": "ineq", "fun": self._constraint_path},
-            ]
-
             t_start = time.perf_counter()
             max_time = float(self.config.max_solve_time_s)
-            callback = None
-            if max_time > 0.0:
-                def _timeout_cb(_xk):  # noqa: ANN001 - scipy callback signature
-                    if time.perf_counter() - t_start > max_time:
+            method_raw = str(self.config.method).strip()
+            method_norm = method_raw.lower().replace("_", "-")
+            nx = int(self.n_x)
+
+            # For LGL, dynamics defects at endpoints are often redundant with boundary constraints
+            # and can cause rank-deficient Jacobians for constrained solvers (e.g. SLSQP).
+            def _dyn_defect(z: np.ndarray) -> np.ndarray:
+                d = self._constraint_dynamics(z)
+                if self.gpm.scheme == "LGL" and self.gpm.N >= 3:
+                    return np.asarray(d, dtype=float)[nx:-nx]
+                return np.asarray(d, dtype=float)
+
+            def _time_budget_exceeded() -> bool:
+                return bool(max_time > 0.0 and (time.perf_counter() - t_start) > max_time)
+
+            def _timeout_cb(_xk, *_args):  # noqa: ANN001 - scipy callback signature
+                if _time_budget_exceeded():
+                    raise _SolveTimeout(f"gpm_solve_timeout>{max_time:.2f}s")
+
+            # --------------------------------------------------------------
+            # Option A: bounded least-squares on constraints (robust)
+            # --------------------------------------------------------------
+            if method_norm in {"least-squares", "least_squares", "lsq"}:
+                b = self._bounds()
+                lb = np.array([(-np.inf if lo is None else float(lo)) for (lo, _hi) in b], dtype=float)
+                ub = np.array([(np.inf if hi is None else float(hi)) for (_lo, hi) in b], dtype=float)
+
+                # Residual weights (tuned to strongly enforce boundary/ineq).
+                w_dyn = 10.0
+                w_bnd = 30.0
+                w_ineq = 30.0
+
+                def residual(z: np.ndarray) -> np.ndarray:
+                    if _time_budget_exceeded():
                         raise _SolveTimeout(f"gpm_solve_timeout>{max_time:.2f}s")
-                callback = _timeout_cb
+                    r_dyn = _dyn_defect(z)
+                    r_bnd = self._constraint_boundary(z, x0, p_target)
+                    g = self._constraint_path(z)
+                    # For g(z) >= 0: penalize only violations.
+                    r_ineq = np.minimum(np.asarray(g, dtype=float), 0.0)
+                    return np.concatenate([w_dyn * r_dyn, w_bnd * r_bnd, w_ineq * r_ineq], axis=0)
 
-            method = str(self.config.method)
-            options: dict = {"maxiter": self.config.maxiter}
-            if method.lower() in {"slsqp"}:
-                options["ftol"] = self.config.ftol
-            elif method.lower() in {"trust-constr", "trust-constr".replace("-", "_")}:
-                # SciPy trust-constr uses gtol/xtol/barrier_tol (no ftol).
-                options["gtol"] = self.config.ftol
-                options["xtol"] = self.config.ftol
-                options["barrier_tol"] = self.config.ftol
+                try:
+                    lsq = scipy.optimize.least_squares(
+                        residual,
+                        z0,
+                        bounds=(lb, ub),
+                        max_nfev=int(self.config.maxiter),
+                        ftol=float(self.config.ftol),
+                        xtol=float(self.config.ftol),
+                        gtol=float(self.config.ftol),
+                    )
+                except _SolveTimeout as e:
+                    raise TimeoutError(str(e)) from e
+
+                solve_time = time.perf_counter() - t_start
+                z_opt = np.asarray(lsq.x, dtype=float)
+                self.last_solution_z = z_opt.copy()
+                X, U, tf = self._unpack(z_opt)
+
+                result_success = bool(lsq.success)
+                result_status = int(lsq.status)
+                result_message = f"least_squares:{lsq.message}"
+                result_iterations = int(getattr(lsq, "nfev", -1))
+                result_cost = float(self._objective(z_opt, x0, p_target))
+                z_for_violation = z_opt
             else:
-                # Best-effort for other methods.
-                options["ftol"] = self.config.ftol
+                # ----------------------------------------------------------
+                # Option B: constrained NLP via scipy.optimize.minimize
+                # ----------------------------------------------------------
+                constraints = [
+                    {"type": "eq", "fun": _dyn_defect},
+                    {"type": "eq", "fun": self._constraint_boundary, "args": (x0, p_target)},
+                    {"type": "ineq", "fun": self._constraint_path},
+                ]
 
-            try:
-                result = scipy.optimize.minimize(
-                    fun=self._objective,
-                    x0=z0,
-                    args=(x0, p_target),
-                    method=method,
-                    bounds=self._bounds(),
-                    constraints=constraints,
-                    options=options,
-                    callback=callback,
-                )
-            except _SolveTimeout as e:
-                raise TimeoutError(str(e)) from e
-            solve_time = time.perf_counter() - t_start
-            self.last_solution_z = np.asarray(result.x, dtype=float).copy()
+                # SciPy uses "trust-constr" spelling; accept trust_constr in configs.
+                method = "trust-constr" if method_norm == "trust-constr" else method_raw
+                options: dict = {"maxiter": self.config.maxiter}
+                if method.lower() in {"slsqp"}:
+                    options["ftol"] = self.config.ftol
+                elif method.lower() in {"trust-constr"}:
+                    options["gtol"] = self.config.ftol
+                    options["xtol"] = self.config.ftol
+                    options["barrier_tol"] = self.config.ftol
+                else:
+                    options["ftol"] = self.config.ftol
 
-            X, U, tf = self._unpack(result.x)
+                try:
+                    result = scipy.optimize.minimize(
+                        fun=self._objective,
+                        x0=z0,
+                        args=(x0, p_target),
+                        method=method,
+                        bounds=self._bounds(),
+                        constraints=constraints,
+                        options=options,
+                        callback=(_timeout_cb if max_time > 0.0 else None),
+                    )
+                except _SolveTimeout as e:
+                    raise TimeoutError(str(e)) from e
+
+                solve_time = time.perf_counter() - t_start
+                z_opt = np.asarray(result.x, dtype=float)
+                self.last_solution_z = z_opt.copy()
+                X, U, tf = self._unpack(z_opt)
+
+                result_success = bool(result.success)
+                result_status = int(result.status)
+                result_message = str(result.message)
+                result_iterations = int(result.nit) if hasattr(result, "nit") else -1
+                result_cost = float(result.fun) if hasattr(result, "fun") and np.isfinite(result.fun) else float("inf")
+                z_for_violation = z_opt
 
             # Build trajectory
             tau = self.gpm.tau
@@ -367,19 +437,19 @@ class GPMSolver:
 
             # Compute violations
             # NOTE: the constraint evaluation below uses the current environment context.
-            dyn_violation = np.max(np.abs(self._constraint_dynamics(result.x))) if result.x.size else float("inf")
-            bnd_violation = np.max(np.abs(self._constraint_boundary(result.x, x0, p_target))) if result.x.size else float("inf")
-            path_violation = np.min(self._constraint_path(result.x)) if result.x.size else -float("inf")
+            dyn_violation = np.max(np.abs(_dyn_defect(z_for_violation))) if z_for_violation.size else float("inf")
+            bnd_violation = np.max(np.abs(self._constraint_boundary(z_for_violation, x0, p_target))) if z_for_violation.size else float("inf")
+            path_violation = np.min(self._constraint_path(z_for_violation)) if z_for_violation.size else -float("inf")
             # For inequality constraints g(z) >= 0: negative means violation
             max_violation = float(max(dyn_violation, bnd_violation, max(0.0, -path_violation)))
 
             terminal_error = float(np.linalg.norm(X[-1, 0:3] - p_target))
             info = SolverInfo(
-                success=bool(result.success),
-                status=int(result.status),
-                message=str(result.message),
-                iterations=int(result.nit) if hasattr(result, "nit") else -1,
-                cost=float(result.fun) if np.isfinite(result.fun) else float("inf"),
+                success=bool(result_success),
+                status=int(result_status),
+                message=str(result_message),
+                iterations=int(result_iterations),
+                cost=float(result_cost),
                 solve_time=float(solve_time),
                 max_violation=max_violation,
                 terminal_error_m=terminal_error,

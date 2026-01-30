@@ -1,0 +1,52 @@
+parafoil_planner_v3:
+  ros__parameters:
+    # Minimal ROS planner config for "online GPM only" quick sanity checks.
+    # Notes:
+    # - use_library=false (no library server required)
+    # - safety disabled + no no-fly constraints for solver speed
+    # - solver.max_solve_time_s prevents long hangs
+
+    planner_rate_hz: 0.2
+
+    planning:
+      dynamics_mode: "simplified"
+
+    use_library: false
+    library_path: ""
+
+    gpm:
+      num_nodes: 8
+      scheme: "LGL"
+      tf_guess: 30.0
+      max_constraint_violation_for_accept: 1.0
+
+    solver:
+      max_solve_time_s: 5.0
+
+    constraints:
+      terrain_type: "flat"
+      terrain_height0_m: 0.0
+      terrain_clearance_m: 0.0
+      no_fly_circles: "[]"
+      no_fly_polygons: "[]"
+      no_fly_polygons_file: ""
+
+    wind:
+      use_topic: true
+      topic: "/wind_estimate"
+      default_ned: [0.0, 0.0, 0.0]
+      input_frame: "ned"
+      convention: "to"
+      timeout_s: 2.0
+      max_speed_mps: 0.0
+
+    # Keep headwind logic enabled so we can exercise the new "strong wind" planning path.
+    headwind:
+      enable: true
+      wind_ratio_trigger: 0.8
+      max_aim_offset_m: 200.0
+      min_progress_mps: 0.0
+      aimpoint_nofly_projection: false
+
+    safety:
+      enable: false
