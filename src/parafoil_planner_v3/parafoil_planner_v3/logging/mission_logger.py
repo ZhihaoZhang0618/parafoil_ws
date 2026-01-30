@@ -46,10 +46,12 @@ class MissionLogger:
             "config": {},
             "timeline": [],
             "planner_logs": [],
+            "planner_status_history": [],
             "controller_logs": [],
             "state_history": [],
             "control_history": [],
             "events": [],
+            "tracking_history": [],
             "metrics": {},
         }
 
@@ -86,6 +88,16 @@ class MissionLogger:
                 "solver": solver_info,
             }
         )
+
+    def log_planner_status(self, timestamp: float, status: dict | str | None) -> None:
+        if status is None:
+            return
+        self.log_data["planner_status_history"].append({"timestamp": float(timestamp), "status": status})
+
+    def log_tracking_mode(self, timestamp: float, mode: str | None) -> None:
+        if not mode:
+            return
+        self.log_data["tracking_history"].append({"timestamp": float(timestamp), "mode": str(mode)})
 
     def log_controller_step(
         self,
@@ -188,8 +200,10 @@ class MissionLogger:
         logger = MissionLogger(output_dir=Path(output_dir), run_id=run_id or "", mode=mode, tags=tags or [])
         logger.log_config(scenario=result.get("scenario"), extra={"params": params or {}})
         logger.log_data["planner_logs"] = result.get("planner_logs", []) or []
+        logger.log_data["planner_status_history"] = result.get("planner_status_history", []) or []
         logger.log_data["state_history"] = result.get("state_history", []) or []
         logger.log_data["control_history"] = result.get("control_history", []) or []
         logger.log_data["events"] = result.get("events", []) or []
+        logger.log_data["tracking_history"] = result.get("tracking_history", []) or []
         logger.log_data["metrics"] = result.get("metrics", {}) or {}
         return logger

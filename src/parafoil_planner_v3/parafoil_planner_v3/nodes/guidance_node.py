@@ -19,6 +19,7 @@ from parafoil_planner_v3.guidance.phase_manager import PhaseManager
 from parafoil_planner_v3.guidance.wind_filter import WindFilter, WindFilterConfig
 from parafoil_planner_v3.dynamics.aerodynamics import PolarTable
 from parafoil_planner_v3.types import Control, GuidancePhase, State, Target, Wind
+from parafoil_planner_v3.utils.quaternion_utils import quat_to_rpy, wrap_pi
 from parafoil_planner_v3.utils.wind_utils import (
     WindConvention,
     WindInputFrame,
@@ -62,6 +63,21 @@ class GuidanceNode(Node):
         self.declare_parameter("wind.filter.gust_hold_s", 1.0)
         self.declare_parameter("target.position_ned", [0.0, 0.0, 0.0])
 
+        # Path tracking / strong-wind L1 options
+        self.declare_parameter("path_tracking.mode", "legacy")  # legacy|strong_wind_l1|auto
+        self.declare_parameter("strong_wind_l1.enable", True)
+        self.declare_parameter("strong_wind_l1.wind_ratio_trigger", 0.8)
+        self.declare_parameter("strong_wind_l1.use_yaw_feedforward", True)
+        self.declare_parameter("strong_wind_l1.min_air_speed_mps", 0.5)
+        self.declare_parameter("strong_wind_l1.cte_gain", 1.0)
+        self.declare_parameter("strong_wind_l1.cte_max_deg", 45.0)
+        self.declare_parameter("strong_wind_l1.crosswind_margin_mps", 0.2)
+        self.declare_parameter("strong_wind_l1.brake_adjust_enable", True)
+        # When enabled, ignore Path yaw feedforward in strong wind and face (approximately) upwind instead.
+        # This reduces downwind drift and implements "backward-drift" semantics even if the planned ground path
+        # keeps moving downwind.
+        self.declare_parameter("strong_wind_l1.force_upwind_yaw", False)
+
         # Phase manager / abort config
         self.declare_parameter("phase.approach_entry_distance", 180.0)
         self.declare_parameter("phase.altitude_margin", 1.1)
@@ -69,6 +85,7 @@ class GuidanceNode(Node):
         self.declare_parameter("phase.approach_altitude_extra", 5.0)
         self.declare_parameter("phase.flare_altitude", 10.0)
         self.declare_parameter("phase.flare_distance", 30.0)
+        self.declare_parameter("phase.flare_distance_altitude_factor", 2.0)
         self.declare_parameter("phase.abort_min_altitude_m", 2.0)
         self.declare_parameter("phase.abort_min_altitude_distance_m", 60.0)
         self.declare_parameter("phase.abort_max_glide_ratio", 10.0)
@@ -122,7 +139,11 @@ class GuidanceNode(Node):
         self._wind_clipped: bool = False
         self._target_ned: np.ndarray = np.asarray(self.get_parameter("target.position_ned").value, dtype=float).reshape(3)
         self._path_ned: list[np.ndarray] = []
+        self._path_yaw: list[float] = []
+        self._path_s: list[float] = []
         self._last_tick_time: float | None = None
+        self._last_diag_log_time: float | None = None
+        self._last_track_mode: str = ""
 
         # Guidance components
         from parafoil_planner_v3.guidance.phase_manager import PhaseConfig
@@ -134,6 +155,7 @@ class GuidanceNode(Node):
             approach_altitude_extra=float(self.get_parameter("phase.approach_altitude_extra").value),
             flare_altitude=float(self.get_parameter("phase.flare_altitude").value),
             flare_distance=float(self.get_parameter("phase.flare_distance").value),
+            flare_distance_altitude_factor=float(self.get_parameter("phase.flare_distance_altitude_factor").value),
             abort_min_altitude_m=float(self.get_parameter("phase.abort_min_altitude_m").value),
             abort_min_altitude_distance_m=float(self.get_parameter("phase.abort_min_altitude_distance_m").value),
             abort_max_glide_ratio=float(self.get_parameter("phase.abort_max_glide_ratio").value),
@@ -216,6 +238,7 @@ class GuidanceNode(Node):
         self.pub_cmd = self.create_publisher(Vector3Stamped, "/control_command", 10)
         self.pub_cmd_sim = self.create_publisher(Vector3Stamped, "/rockpara_actuators_node/auto_commands", 10)
         self.pub_phase = self.create_publisher(String, "/guidance_phase", 10)
+        self.pub_track_mode = self.create_publisher(String, "/path_tracking_mode", 10)
 
         rate = float(self.get_parameter("control_rate_hz").value)
         self.timer = self.create_timer(1.0 / max(rate, 1.0), self._tick)
@@ -270,10 +293,17 @@ class GuidanceNode(Node):
     def _on_path(self, msg: Path) -> None:
         # /planned_trajectory is in world ENU; convert to NED xy list.
         pts: list[np.ndarray] = []
+        yaws: list[float] = []
         for pose in msg.poses:
             p_enu = pose.pose.position
             pts.append(np.array([p_enu.y, p_enu.x], dtype=float))
+            q_enu = pose.pose.orientation
+            q_ned = _quat_enu_to_ned(q_enu)
+            _, _, yaw = quat_to_rpy(q_ned)
+            yaws.append(float(yaw))
         self._path_ned = pts
+        self._path_yaw = yaws
+        self._path_s = self._polyline_cumulative_s(pts)
 
     def _wind_est(self) -> tuple[Wind, dict]:
         now_s = self.get_clock().now().nanoseconds * 1e-9
@@ -364,68 +394,317 @@ class GuidanceNode(Node):
     def _remaining_distance(self, p_xy: np.ndarray) -> float:
         if len(self._path_ned) < 2:
             return 0.0
-        i0 = self._closest_idx(p_xy)
-        S = float(np.linalg.norm(self._path_ned[i0] - p_xy))
-        for i in range(i0, len(self._path_ned) - 1):
-            S += float(np.linalg.norm(self._path_ned[i + 1] - self._path_ned[i]))
-        return float(S)
+        s_proj, _cte, _seg_idx, _seg_t, _t_hat = self._project_to_path(p_xy)
+        s_end = float(self._path_s[-1]) if self._path_s else 0.0
+        return float(max(s_end - s_proj, 0.0))
+
+    @staticmethod
+    def _polyline_cumulative_s(path_xy: list[np.ndarray]) -> list[float]:
+        if len(path_xy) < 2:
+            return [0.0] * len(path_xy)
+        s = [0.0]
+        for i in range(1, len(path_xy)):
+            s.append(s[-1] + float(np.linalg.norm(path_xy[i] - path_xy[i - 1])))
+        return s
+
+    def _project_to_path(self, p_xy: np.ndarray) -> tuple[float, float, int, float, np.ndarray]:
+        """
+        Project p_xy onto path polyline.
+        Returns (s_proj, cross_track_error, seg_idx, seg_t, seg_t_hat).
+        """
+        if len(self._path_ned) < 2 or not self._path_s:
+            return 0.0, 0.0, 0, 0.0, np.array([1.0, 0.0], dtype=float)
+        p_xy = np.asarray(p_xy, dtype=float).reshape(2)
+        best_d2 = float("inf")
+        best_s = 0.0
+        best_i = 0
+        best_t = 0.0
+        best_sign = 0.0
+        best_t_hat = np.array([1.0, 0.0], dtype=float)
+        for i in range(len(self._path_ned) - 1):
+            a = self._path_ned[i]
+            b = self._path_ned[i + 1]
+            ab = b - a
+            ab2 = float(np.dot(ab, ab))
+            if ab2 < 1e-12:
+                continue
+            t = float(np.clip(np.dot(p_xy - a, ab) / ab2, 0.0, 1.0))
+            proj = a + t * ab
+            d = p_xy - proj
+            d2 = float(np.dot(d, d))
+            if d2 < best_d2:
+                best_d2 = d2
+                best_s = float(self._path_s[i] + t * np.sqrt(ab2))
+                # NOTE: We use heading angles as bearing-from-N (atan2(E, N)), which is a clockwise-positive
+                # convention. For the cross-track correction term to have the expected sign (positive cte -> steer
+                # right), we flip the usual 2D cross-product sign here.
+                cross = float(ab[0] * d[1] - ab[1] * d[0])
+                best_sign = float(-np.sign(cross)) if abs(cross) > 1e-12 else 0.0
+                best_i = i
+                best_t = t
+                n = float(np.linalg.norm(ab))
+                best_t_hat = (ab / n) if n > 1e-9 else np.array([1.0, 0.0], dtype=float)
+        return float(best_s), float(best_sign * np.sqrt(best_d2)), int(best_i), float(best_t), best_t_hat
+
+    def _interp_on_path(self, s_query: float) -> tuple[np.ndarray, np.ndarray, int, float]:
+        if len(self._path_ned) < 2 or not self._path_s:
+            return np.array([0.0, 0.0], dtype=float), np.array([1.0, 0.0], dtype=float), 0, 0.0
+        s_query = float(np.clip(s_query, self._path_s[0], self._path_s[-1]))
+        i = int(np.searchsorted(np.asarray(self._path_s), s_query, side="right") - 1)
+        i = int(np.clip(i, 0, len(self._path_ned) - 2))
+        s0 = float(self._path_s[i])
+        s1 = float(self._path_s[i + 1])
+        a = self._path_ned[i]
+        b = self._path_ned[i + 1]
+        ds = float(max(s1 - s0, 1e-9))
+        t = float(np.clip((s_query - s0) / ds, 0.0, 1.0))
+        p = (1.0 - t) * a + t * b
+        ab = b - a
+        n = float(np.linalg.norm(ab))
+        t_hat = (ab / n) if n > 1e-9 else np.array([1.0, 0.0], dtype=float)
+        return p.astype(float), t_hat.astype(float), int(i), float(t)
+
+    def _lookahead_pose(self, p_xy: np.ndarray, L1: float) -> tuple[np.ndarray, float | None, np.ndarray, float]:
+        if len(self._path_ned) < 2 or not self._path_s:
+            return p_xy.astype(float), None, np.array([1.0, 0.0], dtype=float), 0.0
+        s_proj, cte, _seg_idx, _seg_t, _t_hat = self._project_to_path(p_xy)
+        s_query = float(min(s_proj + float(L1), float(self._path_s[-1])))
+        p_L1, t_hat, idx, t = self._interp_on_path(s_query)
+        yaw_ff = None
+        if self._path_yaw and len(self._path_yaw) == len(self._path_ned):
+            y0 = float(self._path_yaw[idx])
+            y1 = float(self._path_yaw[min(idx + 1, len(self._path_yaw) - 1)])
+            yaw_ff = float(wrap_pi(y0 + float(wrap_pi(y1 - y0)) * t))
+        return p_L1, yaw_ff, t_hat, float(cte)
+
+    def _adjust_brake_for_crosswind(
+        self,
+        brake_sym: float,
+        wind_xy: np.ndarray,
+        t_hat: np.ndarray,
+        brake_min: float,
+        brake_max: float,
+        margin: float,
+    ) -> float:
+        wind_xy = np.asarray(wind_xy, dtype=float).reshape(2)
+        t_hat = np.asarray(t_hat, dtype=float).reshape(2)
+        n = float(np.linalg.norm(t_hat))
+        if n < 1e-9:
+            return float(np.clip(brake_sym, brake_min, brake_max))
+        t_hat = t_hat / n
+        cross = float(np.linalg.norm(wind_xy - float(np.dot(wind_xy, t_hat)) * t_hat))
+        candidates = [float(b) for b in self.polar.brake if brake_min - 1e-9 <= float(b) <= brake_max + 1e-9]
+        candidates = sorted(candidates, reverse=True)
+        for b in candidates:
+            V_air, _ = self.polar.interpolate(float(b))
+            if float(V_air) >= cross + float(margin):
+                return float(np.clip(b, brake_min, brake_max))
+        return float(np.clip(brake_min, brake_min, brake_max))
 
     def _tick(self) -> None:
         state = self._state()
         if state is None:
             return
-        target = Target(p_I=self._target_ned)
+        desired_target = Target(p_I=self._target_ned)
         raw_wind, _wind_diag = self._wind_est()
         dt = 0.0 if self._last_tick_time is None else float(max(state.t - self._last_tick_time, 0.0))
         self._last_tick_time = float(state.t)
         filtered = self._wind_filter.update(raw_wind.v_I, dt)
         wind = Wind(v_I=filtered)
 
-        trans = self.phase_mgr.update(state, target, wind)
+        # In safety-first mode the planner may choose a different landing site than the desired /target.
+        # Keep guidance phases (approach/flare/abort) consistent with the *planned* trajectory endpoint
+        # when a path is available; otherwise fall back to the desired target.
+        target_for_phase = desired_target
+        if self._path_ned:
+            last_xy = self._path_ned[-1]
+            target_for_phase = Target(
+                p_I=np.array([float(last_xy[0]), float(last_xy[1]), float(desired_target.p_I[2])], dtype=float)
+            )
+
+        trans = self.phase_mgr.update(state, target_for_phase, wind)
         if trans.triggered and trans.to_phase == GuidancePhase.FLARE:
             self.flare.on_enter(state)
 
         phase = self.phase_mgr.current_phase
         # If planner provided a path, follow it with a simple lookahead.
         L1 = float(self.get_parameter("L1_distance").value)
-        track_xy = self._lookahead_point(state.position_xy, L1) if self._path_ned else None
+        track_xy = None
+        yaw_ff = None
+        t_hat = np.array([1.0, 0.0], dtype=float)
+        cte = 0.0
+        if self._path_ned:
+            track_xy, yaw_ff, t_hat, cte = self._lookahead_pose(state.position_xy, L1)
         if track_xy is None:
-            track_xy = target.position_xy
+            track_xy = desired_target.position_xy
 
         # Energy-based symmetric brake: required slope ~ H / remaining distance.
         S_rem = self._remaining_distance(state.position_xy) if self._path_ned else float(
-            np.linalg.norm(target.position_xy - state.position_xy)
+            np.linalg.norm(desired_target.position_xy - state.position_xy)
         )
-        H_rem = float(max(state.altitude - target.altitude, 0.0))
+        H_rem = float(max(state.altitude - target_for_phase.altitude, 0.0))
         k_req = 0.0 if S_rem < 1e-3 else float(H_rem / S_rem)
         b_slope = float(self.polar.select_brake_for_required_slope(k_req))
 
+        def _wind_ratio(brake_sym: float) -> float:
+            wind_speed = float(np.linalg.norm(wind.v_I[:2]))
+            v_air = np.asarray(state.v_I[:2], dtype=float) - np.asarray(wind.v_I[:2], dtype=float)
+            Va_meas = float(np.linalg.norm(v_air))
+            if Va_meas > 0.3:
+                return float(wind_speed / max(Va_meas, 1e-6))
+            V_air, _ = self.polar.interpolate(float(brake_sym))
+            if float(V_air) <= 1e-6:
+                return 0.0
+            return float(wind_speed / float(V_air))
+
+        def _is_strong_wind(brake_sym: float) -> bool:
+            ratio = _wind_ratio(brake_sym)
+            return bool(ratio >= float(self.get_parameter("strong_wind_l1.wind_ratio_trigger").value))
+
+        def _use_strong_wind_l1(brake_sym: float) -> bool:
+            if not self._path_ned:
+                return False
+            if not bool(self.get_parameter("strong_wind_l1.enable").value):
+                return False
+            mode = str(self.get_parameter("path_tracking.mode").value).strip().lower()
+            if mode == "strong_wind_l1":
+                return True
+            if mode != "auto":
+                return False
+            return _is_strong_wind(brake_sym)
+
+        def _strong_wind_cfg() -> "StrongWindL1Config":
+            from parafoil_planner_v3.guidance.control_laws import StrongWindL1Config
+
+            return StrongWindL1Config(
+                min_air_speed=float(self.get_parameter("strong_wind_l1.min_air_speed_mps").value),
+                cte_gain=float(self.get_parameter("strong_wind_l1.cte_gain").value),
+                cte_max_rad=float(np.deg2rad(self.get_parameter("strong_wind_l1.cte_max_deg").value)),
+                use_yaw_feedforward=bool(self.get_parameter("strong_wind_l1.use_yaw_feedforward").value),
+            )
+
+        track_mode = "legacy"
+        strong_wind_debug: dict | None = None
+
         if phase == GuidancePhase.CRUISE:
             # Use cruise logic but override tracking point if path exists.
-            if self._path_ned and not self.cruise.should_override_path(wind):
-                b = float(np.clip(self.cruise.config.brake_cruise, 0.0, float(self.get_parameter("brake_max").value)))
-                from parafoil_planner_v3.guidance.control_laws import track_point_control
+            b = float(np.clip(self.cruise.config.brake_cruise, 0.0, float(self.get_parameter("brake_max").value)))
+            strong_wind = _is_strong_wind(b)
+            if self._path_ned and (strong_wind or not self.cruise.should_override_path(wind)):
+                if _use_strong_wind_l1(b):
+                    from parafoil_planner_v3.guidance.control_laws import track_path_strong_wind_l1
 
-                control = track_point_control(state, track_xy, brake_sym=b, cfg=self.cruise.config.lateral)
+                    yaw_ff_use = yaw_ff
+                    if bool(self.get_parameter("strong_wind_l1.force_upwind_yaw").value) and strong_wind:
+                        wxy = np.asarray(wind.v_I[:2], dtype=float)
+                        if float(np.linalg.norm(wxy)) > 0.2:
+                            yaw_ff_use = float(np.arctan2(-wxy[1], -wxy[0]))
+
+                    if bool(self.get_parameter("strong_wind_l1.brake_adjust_enable").value):
+                        b = self._adjust_brake_for_crosswind(
+                            b,
+                            wind.v_I[:2],
+                            t_hat,
+                            0.0,
+                            float(self.get_parameter("brake_max").value),
+                            float(self.get_parameter("strong_wind_l1.crosswind_margin_mps").value),
+                        )
+                    track_mode = "strong_wind_l1"
+                    control, strong_wind_debug = track_path_strong_wind_l1(
+                        state=state,
+                        wind_xy=wind.v_I[:2],
+                        target_xy=track_xy,
+                        path_tangent_hat=t_hat,
+                        yaw_ff=yaw_ff_use,
+                        brake_sym=b,
+                        cfg=self.cruise.config.lateral,
+                        l1_dist=L1,
+                        cross_track_error=cte,
+                        sw_cfg=_strong_wind_cfg(),
+                    )
+                else:
+                    from parafoil_planner_v3.guidance.control_laws import track_point_control
+
+                    control = track_point_control(state, track_xy, brake_sym=b, cfg=self.cruise.config.lateral)
             else:
-                control = self.cruise.compute_control(state, target, wind, dt=0.0)
+                control = self.cruise.compute_control(state, target_for_phase, wind, dt=0.0)
         elif phase == GuidancePhase.APPROACH:
             b = float(np.clip(b_slope, 0.0, float(self.get_parameter("brake_max").value)))
-            if self._path_ned and not self.approach.should_override_path(state, target, wind, brake=b):
-                from parafoil_planner_v3.guidance.control_laws import track_point_control
+            strong_wind = _is_strong_wind(b)
+            if self._path_ned and (
+                strong_wind or not self.approach.should_override_path(state, target_for_phase, wind, brake=b)
+            ):
+                if _use_strong_wind_l1(b):
+                    from parafoil_planner_v3.guidance.control_laws import track_path_strong_wind_l1
 
-                control = track_point_control(state, track_xy, brake_sym=b, cfg=self.approach.config.lateral)
+                    yaw_ff_use = yaw_ff
+                    if bool(self.get_parameter("strong_wind_l1.force_upwind_yaw").value) and strong_wind:
+                        wxy = np.asarray(wind.v_I[:2], dtype=float)
+                        if float(np.linalg.norm(wxy)) > 0.2:
+                            yaw_ff_use = float(np.arctan2(-wxy[1], -wxy[0]))
+
+                    if bool(self.get_parameter("strong_wind_l1.brake_adjust_enable").value):
+                        b = self._adjust_brake_for_crosswind(
+                            b,
+                            wind.v_I[:2],
+                            t_hat,
+                            float(self.get_parameter("approach.brake_min").value),
+                            float(self.get_parameter("approach.brake_max").value),
+                            float(self.get_parameter("strong_wind_l1.crosswind_margin_mps").value),
+                        )
+                    track_mode = "strong_wind_l1"
+                    control, strong_wind_debug = track_path_strong_wind_l1(
+                        state=state,
+                        wind_xy=wind.v_I[:2],
+                        target_xy=track_xy,
+                        path_tangent_hat=t_hat,
+                        yaw_ff=yaw_ff_use,
+                        brake_sym=b,
+                        cfg=self.approach.config.lateral,
+                        l1_dist=L1,
+                        cross_track_error=cte,
+                        sw_cfg=_strong_wind_cfg(),
+                    )
+                else:
+                    from parafoil_planner_v3.guidance.control_laws import track_point_control
+
+                    control = track_point_control(state, track_xy, brake_sym=b, cfg=self.approach.config.lateral)
             else:
-                control = self.approach.compute_control(state, target, wind, dt=0.0)
+                control = self.approach.compute_control(state, target_for_phase, wind, dt=0.0)
         elif phase == GuidancePhase.FLARE:
             if self._path_ned:
-                # Flare brake schedule, but keep tracking last part of path.
-                from parafoil_planner_v3.guidance.control_laws import track_point_control
+                brake = float(self.flare.brake_command(state, target_for_phase))
+                # In strong wind, keep using the air-relative path tracker during flare to avoid
+                # downwind drift into no-fly corridors.
+                if _use_strong_wind_l1(brake):
+                    from parafoil_planner_v3.guidance.control_laws import track_path_strong_wind_l1
 
-                brake = float(self.flare.brake_command(state, target))
-                control = track_point_control(state, track_xy, brake_sym=brake, cfg=self.flare.config.lateral)
+                    yaw_ff_use = yaw_ff
+                    if bool(self.get_parameter("strong_wind_l1.force_upwind_yaw").value) and _is_strong_wind(brake):
+                        wxy = np.asarray(wind.v_I[:2], dtype=float)
+                        if float(np.linalg.norm(wxy)) > 0.2:
+                            yaw_ff_use = float(np.arctan2(-wxy[1], -wxy[0]))
+
+                    track_mode = "strong_wind_l1"
+                    control, strong_wind_debug = track_path_strong_wind_l1(
+                        state=state,
+                        wind_xy=wind.v_I[:2],
+                        target_xy=track_xy,
+                        path_tangent_hat=t_hat,
+                        yaw_ff=yaw_ff_use,
+                        brake_sym=brake,
+                        cfg=self.flare.config.lateral,
+                        l1_dist=L1,
+                        cross_track_error=cte,
+                        sw_cfg=_strong_wind_cfg(),
+                    )
+                else:
+                    # Flare brake schedule, but keep tracking last part of path.
+                    from parafoil_planner_v3.guidance.control_laws import track_point_control
+
+                    control = track_point_control(state, track_xy, brake_sym=brake, cfg=self.flare.config.lateral)
             else:
-                control = self.flare.compute_control(state, target, wind, dt=0.0)
+                control = self.flare.compute_control(state, target_for_phase, wind, dt=0.0)
         elif phase == GuidancePhase.ABORT:
             from parafoil_planner_v3.guidance.control_laws import track_point_control
 
@@ -436,11 +715,36 @@ class GuidanceNode(Node):
         else:
             control = Control(0.0, 0.0)
 
+        if track_mode and track_mode != self._last_track_mode:
+            self.get_logger().info(f"path_tracking_mode={track_mode}")
+            self._last_track_mode = track_mode
+
+        if strong_wind_debug is not None:
+            now_s = float(state.t)
+            if self._last_diag_log_time is None or now_s - self._last_diag_log_time >= 1.0:
+                self._last_diag_log_time = now_s
+                wind_ratio = _wind_ratio(brake_sym=float(control.delta_L + control.delta_R) * 0.5)
+                self.get_logger().info(
+                    "strong_wind_l1"
+                    f" chi_ref={strong_wind_debug.get('chi_ref', 0.0):.2f}"
+                    f" chi_air={strong_wind_debug.get('chi_air', 0.0):.2f}"
+                    f" chi_path={strong_wind_debug.get('chi_path', 0.0):.2f}"
+                    f" chi_cte={strong_wind_debug.get('chi_cte', 0.0):.2f}"
+                    f" Va={strong_wind_debug.get('Va', 0.0):.2f}"
+                    f" wind_ratio={wind_ratio:.2f}"
+                    f" cte={strong_wind_debug.get('cross_track_error', 0.0):.2f}"
+                    f" yaw_rate_cmd={strong_wind_debug.get('yaw_rate_cmd', 0.0):.2f}"
+                )
+
         self._publish_control(control)
 
         msg = String()
         msg.data = phase.value
         self.pub_phase.publish(msg)
+
+        mode_msg = String()
+        mode_msg.data = str(track_mode)
+        self.pub_track_mode.publish(mode_msg)
 
 
 def main(args=None) -> None:

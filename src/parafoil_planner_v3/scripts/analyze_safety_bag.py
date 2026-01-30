@@ -79,6 +79,21 @@ def _load_planner_status_messages(bag_path: Path) -> list[str]:
 
 
 def _parse_safety_status(text: str) -> dict | None:
+    text = text.strip()
+    if text.startswith("{"):
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError:
+            payload = None
+        if isinstance(payload, dict):
+            safety = payload.get("safety")
+            if isinstance(safety, dict):
+                return {
+                    "reason": str(safety.get("reason", "")),
+                    "risk": float(safety.get("risk", float("inf"))),
+                    "distance_to_desired_m": float(safety.get("distance_to_desired_m", float("inf"))),
+                    "reach_margin_mps": float(safety.get("reach_margin_mps", float("inf"))),
+                }
     pattern = re.compile(
         r"safety=([\w\-]+)\s+risk=([0-9eE+\-.]+)\s+dist=([0-9eE+\-.]+)m\s+margin=([0-9eE+\-.]+)mps"
     )

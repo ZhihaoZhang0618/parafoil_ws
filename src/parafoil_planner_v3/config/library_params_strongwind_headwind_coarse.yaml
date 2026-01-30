@@ -5,12 +5,12 @@ parafoil_planner_v3:
 
       # Coarse strong-wind grid (fast-to-generate; intended for coarse KNN stage).
       # Focus on wind_ratio >= ~1 (for PolarTable V_air_max ~= 4.44 m/s).
-      wind_speeds: [6.0, 8.0, 10.0]
-      wind_directions: [0, 90, 180, 270]
-      initial_altitudes: [20, 40]
+      wind_speeds: [4.0, 6.0, 8.0, 10.0, 12.0]
+      wind_directions: [0, 45, 90, 135, 180, 225, 270, 315]
+      initial_altitudes: [30, 50, 70, 90]
       # Include short downwind distances to enable "slow drift" behaviors.
-      target_distances: [50, 100, 150]
-      target_bearings: [0, 90, 180, 270]
+      target_distances: [30, 50, 80, 120, 180]
+      target_bearings: [0, 45, 90, 135, 180, 225, 270, 315]
 
       trajectory_types: ["DIRECT", "S_TURN"]
       num_workers: "auto"
@@ -19,9 +19,9 @@ parafoil_planner_v3:
         method: "SLSQP"
         solve_mode: "least_squares"
         dynamics_mode: "simplified"  # keep coarse fast/stable
-        num_nodes: 10
+        num_nodes: 12
         scheme: "LGL"
-        max_iterations: 220
+        max_iterations: 250
         tolerance: 1.0e-6
 
         # NOTE: In strong wind, feasibility dominates; keep u_ref shaping light.
@@ -58,7 +58,7 @@ parafoil_planner_v3:
 
         # Strong-wind extensions
         reachability_filter_enable: true
-        reachability_margin_mps: 0.2
+        reachability_margin_mps: 0.3
         reachability_min_progress_mps: 0.0
         strong_wind_ratio_trigger: 0.8
         strong_wind_init_yaw_mode: "req_air"   # none|req_air|upwind

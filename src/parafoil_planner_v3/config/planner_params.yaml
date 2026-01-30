@@ -16,6 +16,12 @@ parafoil_planner_v3:
       cost_w_control: 0.05
       cost_w_time: 0.02
       cost_w_path_length: 0.0
+      cost_w_risk_integral: 0.0
+      cost_w_risk_max: 0.0
+      risk_sample_step_m: 5.0
+      nofly_sample_step_m: 2.0
+      matching:
+        feature_weights: {}
       # Skip KNN+adaptation when wind makes "track to target line" ill-conditioned.
       skip_if_unreachable_wind: true
       min_track_ground_speed_mps: 0.2

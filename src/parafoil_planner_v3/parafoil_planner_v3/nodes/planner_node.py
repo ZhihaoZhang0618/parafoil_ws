@@ -104,12 +104,32 @@ class PlannerNode(Node):
         self.declare_parameter("library.cost_w_control", 0.05)
         self.declare_parameter("library.cost_w_time", 0.02)
         self.declare_parameter("library.cost_w_path_length", 0.0)
+        self.declare_parameter("library.cost_w_risk_integral", 0.0)
+        self.declare_parameter("library.cost_w_risk_max", 0.0)
+        self.declare_parameter("library.risk_sample_step_m", 5.0)
+        self.declare_parameter("library.nofly_sample_step_m", 2.0)
+        self.declare_parameter("library.cost_w_process_risk_integral", 0.0)
+        self.declare_parameter("library.cost_w_process_risk_max", 0.0)
         self.declare_parameter("library.coarse_path", "")
         self.declare_parameter("library.fine_path", "")
         self.declare_parameter("library.coarse_k_neighbors", 5)
         self.declare_parameter("library.fine_k_neighbors", 5)
         self.declare_parameter("library.require_coarse_match", True)
         self.declare_parameter("library.fallback_to_coarse", True)
+        self.declare_parameter("library.matching.feature_weights", {})
+        # Optional per-feature weights (YAML-friendly)
+        for key in (
+            "altitude",
+            "distance",
+            "bearing",
+            "wind_speed",
+            "rel_wind",
+            "wind_ratio",
+            "wind_along",
+            "wind_cross",
+            "wind_angle",
+        ):
+            self.declare_parameter(f"library.matching.feature_weights.{key}", float("nan"))
         # Library safety gates (0 disables a check)
         self.declare_parameter("library.max_feature_distance", 0.0)
         self.declare_parameter("library.max_altitude_error_m", 0.0)
@@ -123,6 +143,7 @@ class PlannerNode(Node):
         self.declare_parameter("library.max_scale_z", 0.0)
         self.declare_parameter("library.skip_if_unreachable_wind", True)
         self.declare_parameter("library.min_track_ground_speed_mps", 0.2)
+        self.declare_parameter("library.reachability_margin_mps", 0.2)
 
         self.declare_parameter("gpm.num_nodes", 20)
         self.declare_parameter("gpm.scheme", "LGL")
@@ -222,6 +243,9 @@ class PlannerNode(Node):
         self.declare_parameter("safety.selector.nofly_buffer_m", 20.0)
         self.declare_parameter("safety.selector.nofly_weight", 5.0)
         self.declare_parameter("safety.selector.snap_to_terrain", True)
+        self.declare_parameter("safety.selector.avoid_crossing_barrier_nofly", False)
+        self.declare_parameter("safety.selector.barrier_min_length_m", 300.0)
+        self.declare_parameter("safety.selector.barrier_max_width_m", 50.0)
 
         self.declare_parameter("safety.reachability.brake", 0.2)
         self.declare_parameter("safety.reachability.min_time_s", 2.0)
@@ -279,6 +303,12 @@ class PlannerNode(Node):
             library_cost_w_control=float(self.get_parameter("library.cost_w_control").value),
             library_cost_w_time=float(self.get_parameter("library.cost_w_time").value),
             library_cost_w_path_length=float(self.get_parameter("library.cost_w_path_length").value),
+            library_cost_w_risk_integral=float(self.get_parameter("library.cost_w_risk_integral").value),
+            library_cost_w_risk_max=float(self.get_parameter("library.cost_w_risk_max").value),
+            library_risk_sample_step_m=float(self.get_parameter("library.risk_sample_step_m").value),
+            library_nofly_sample_step_m=float(self.get_parameter("library.nofly_sample_step_m").value),
+            library_cost_w_process_risk_integral=float(self.get_parameter("library.cost_w_process_risk_integral").value),
+            library_cost_w_process_risk_max=float(self.get_parameter("library.cost_w_process_risk_max").value),
             library_coarse_k_neighbors=int(self.get_parameter("library.coarse_k_neighbors").value),
             library_fine_k_neighbors=int(self.get_parameter("library.fine_k_neighbors").value),
             library_require_coarse_match=bool(self.get_parameter("library.require_coarse_match").value),
@@ -295,6 +325,7 @@ class PlannerNode(Node):
             library_max_scale_z=float(self.get_parameter("library.max_scale_z").value),
             library_skip_if_unreachable_wind=bool(self.get_parameter("library.skip_if_unreachable_wind").value),
             library_min_track_ground_speed_mps=float(self.get_parameter("library.min_track_ground_speed_mps").value),
+            library_reachability_margin_mps=float(self.get_parameter("library.reachability_margin_mps").value),
             solver_method=str(self.get_parameter("solver.method").value),
             solver_maxiter=int(self.get_parameter("solver.maxiter").value),
             solver_ftol=float(self.get_parameter("solver.ftol").value),
@@ -431,10 +462,19 @@ class PlannerNode(Node):
                 nofly_buffer_m=float(self.get_parameter("safety.selector.nofly_buffer_m").value),
                 nofly_weight=float(self.get_parameter("safety.selector.nofly_weight").value),
                 snap_to_terrain=bool(self.get_parameter("safety.selector.snap_to_terrain").value),
+                avoid_crossing_barrier_nofly=bool(self.get_parameter("safety.selector.avoid_crossing_barrier_nofly").value),
+                barrier_min_length_m=float(self.get_parameter("safety.selector.barrier_min_length_m").value),
+                barrier_max_width_m=float(self.get_parameter("safety.selector.barrier_max_width_m").value),
                 min_progress_mps=float(self.get_parameter("headwind.min_progress_mps").value),
                 reachability=reach_cfg,
             )
             landing_site_selector = LandingSiteSelector(config=selector_cfg, risk_map=risk_map)
+            self.get_logger().info(
+                "Safety selector barrier_filter="
+                f"{int(bool(selector_cfg.avoid_crossing_barrier_nofly))}"
+                f" min_len={float(selector_cfg.barrier_min_length_m):.1f}"
+                f" max_w={float(selector_cfg.barrier_max_width_m):.1f}"
+            )
             self.get_logger().info("Safety landing site selector enabled")
 
         library: Optional[TrajectoryLibrary] = None
@@ -447,9 +487,14 @@ class PlannerNode(Node):
         if not fine_path:
             fine_path = library_path
 
+        feature_weights = self._load_feature_weights()
+        self._library_feature_weights = feature_weights or None
+
         if planner_cfg.use_library and coarse_path:
             try:
                 library_coarse = TrajectoryLibrary.load(coarse_path)
+                if feature_weights:
+                    library_coarse.build_index(feature_weights=feature_weights)
                 self.get_logger().info(f"Loaded COARSE library: {len(library_coarse)} trajectories from {coarse_path}")
             except Exception as e:
                 self.get_logger().error(f"Failed to load coarse library '{coarse_path}': {e}")
@@ -458,6 +503,8 @@ class PlannerNode(Node):
         if planner_cfg.use_library and fine_path:
             try:
                 library_fine = TrajectoryLibrary.load(fine_path)
+                if feature_weights:
+                    library_fine.build_index(feature_weights=feature_weights)
                 self.get_logger().info(f"Loaded FINE library: {len(library_fine)} trajectories from {fine_path}")
                 library = library_fine
             except Exception as e:
@@ -499,6 +546,7 @@ class PlannerNode(Node):
         self._wind_input_frame_used: str = ""
         self._wind_convention_used: str = ""
         self._wind_clipped: bool = False
+        self._library_feature_weights: dict[str, float] | None = None
         self._target_ned: Optional[np.ndarray] = np.asarray(self.get_parameter("target.position_ned").value, dtype=float).reshape(3)
         self._safe_target_ned: Optional[np.ndarray] = None
         self._aimpoint_ned: Optional[np.ndarray] = None
@@ -653,6 +701,39 @@ class PlannerNode(Node):
         diag["source"] = "topic"
         return Wind(v_I=self._wind_ned_to), diag
 
+    @staticmethod
+    def _parse_feature_weights(value) -> dict[str, float]:
+        if isinstance(value, dict):
+            return {str(k): float(v) for k, v in value.items() if v is not None}
+        if isinstance(value, str):
+            raw = value.strip()
+            if not raw:
+                return {}
+            try:
+                parsed = json.loads(raw)
+            except json.JSONDecodeError:
+                return {}
+            if isinstance(parsed, dict):
+                return {str(k): float(v) for k, v in parsed.items() if v is not None}
+        return {}
+
+    def _load_feature_weights(self) -> dict[str, float]:
+        weights = self._parse_feature_weights(self.get_parameter("library.matching.feature_weights").value)
+        if weights:
+            return weights
+        prefix_params = self.get_parameters_by_prefix("library.matching.feature_weights")
+        for key, param in prefix_params.items():
+            if not key:
+                continue
+            val = param.value
+            try:
+                fval = float(val)
+            except (TypeError, ValueError):
+                continue
+            if np.isfinite(fval):
+                weights[str(key)] = float(fval)
+        return weights
+
     def _load_policy_config(self) -> TargetUpdatePolicyConfig:
         approach_allow_update = self.get_parameter("target.update_policy.approach_allow_update").value
         if isinstance(approach_allow_update, str):
@@ -671,6 +752,138 @@ class PlannerNode(Node):
             smooth_transition=bool(self.get_parameter("target.update_policy.smooth_transition").value),
             smooth_rate_mps=float(self.get_parameter("target.update_policy.smooth_rate_mps").value),
         )
+
+    def _build_planner_status(
+        self,
+        *,
+        traj,
+        info,
+        wind: Wind,
+        wind_ratio: float,
+        wind_diag: dict,
+        selection: LandingSiteSelection | None,
+        policy_reason: UpdateReason | None,
+    ) -> dict:
+        plan_meta = self.planner.last_plan_meta or {}
+        plan_source = str(plan_meta.get("plan_source", "none"))
+        library_hit = bool(plan_meta.get("library_hit", False))
+        library_stage = "none"
+        if library_hit:
+            library_stage = str(plan_meta.get("library_stage", "library"))
+        elif plan_source == "gpm":
+            library_stage = "gpm"
+        elif plan_source == "fallback":
+            library_stage = "fallback"
+
+        stats = plan_meta.get("library_stats") if isinstance(plan_meta.get("library_stats"), dict) else {}
+        candidates_total = int(stats.get("candidates_total", 0)) if stats else 0
+        candidates_rejected_nofly = int(stats.get("candidates_rejected_nofly", 0)) if stats else 0
+        candidates_rejected_terminal = int(stats.get("candidates_rejected_terminal", 0)) if stats else 0
+        candidates_kept = int(stats.get("candidates_kept", 0)) if stats else 0
+
+        # Risk metrics
+        risk_map = self.planner.landing_site_selector.risk_map if self.planner.landing_site_selector is not None else None
+        risk_available = bool(risk_map is not None and getattr(risk_map, "layers", None))
+        meta = dict(traj.metadata or {}) if traj is not None else {}
+        if risk_available and ("risk_integral" not in meta and "process_risk_integral" not in meta):
+            meta.update(self.planner._compute_process_risk_metrics(traj))
+        risk_integral = meta.get("risk_integral", meta.get("process_risk_integral")) if risk_available else None
+        risk_max = meta.get("risk_max", meta.get("process_risk_max")) if risk_available else None
+        risk_oob_rate = meta.get("risk_oob_rate") if risk_available else None
+
+        # No-fly margin for the final trajectory
+        no_fly, no_fly_polygons = self.planner._build_no_fly()
+        if traj is not None:
+            nofly_margin_min, nofly_available = self.planner._min_signed_distance_on_path(
+                traj,
+                no_fly,
+                no_fly_polygons,
+                float(self.planner.config.library_nofly_sample_step_m),
+            )
+        else:
+            nofly_margin_min, nofly_available = float("inf"), False
+        if not nofly_available:
+            nofly_margin_min = None
+
+        success = bool(traj is not None and getattr(traj, "waypoints", None))
+
+        # Reason logic (prioritized)
+        reason = "ok"
+        if nofly_available and nofly_margin_min is not None and float(nofly_margin_min) < 0.0:
+            reason = "nofly_violation"
+        else:
+            msg_lower = str(info.message).lower() if info is not None else ""
+            if "timeout" in msg_lower:
+                reason = "solver_timeout"
+            elif plan_source == "fallback":
+                reason = "fallback_direct"
+            elif str(plan_meta.get("skip_library_reason")) == "unreachable_wind":
+                reason = "unreachable_wind"
+            elif bool(plan_meta.get("library_attempted", False)) and not library_hit:
+                if candidates_total > 0 and candidates_rejected_nofly >= candidates_total:
+                    reason = "nofly_violation"
+                else:
+                    reason = "library_miss"
+            elif risk_available and risk_oob_rate is not None and float(risk_oob_rate) > 0.0:
+                reason = "oob_risk_grid"
+
+        safety_payload = None
+        if selection is not None and selection.reason != "disabled":
+            meta_sel = selection.metadata or {}
+            safety_payload = {
+                "reason": str(selection.reason),
+                "risk": float(selection.risk),
+                "distance_to_desired_m": float(selection.distance_to_desired_m),
+                "reach_margin_mps": float(selection.reach_margin_mps),
+                "tgo_s": float(meta_sel.get("touchdown_tgo_s")) if meta_sel.get("touchdown_tgo_s") is not None else None,
+                "v_air_mps": float(meta_sel.get("touchdown_v_air_mps")) if meta_sel.get("touchdown_v_air_mps") is not None else None,
+                "sink_mps": float(meta_sel.get("touchdown_sink_mps")) if meta_sel.get("touchdown_sink_mps") is not None else None,
+                "v_g_along_max_mps": float(meta_sel.get("touchdown_v_g_along_max_mps")) if meta_sel.get("touchdown_v_g_along_max_mps") is not None else None,
+                "aimpoint_used": bool(meta_sel.get("aimpoint_used")) if meta_sel.get("aimpoint_used") is not None else None,
+                "aimpoint_n": float(meta_sel.get("aimpoint_n")) if meta_sel.get("aimpoint_n") is not None else None,
+                "aimpoint_e": float(meta_sel.get("aimpoint_e")) if meta_sel.get("aimpoint_e") is not None else None,
+                "policy_reason": policy_reason.value if policy_reason is not None else None,
+            }
+
+        feature_weights_custom = bool(self._library_feature_weights)
+
+        return {
+            "schema_version": "planner_status.v2",
+            "success": bool(success),
+            "reason": str(reason),
+            "wind_ratio": float(wind_ratio),
+            "library_hit": bool(library_hit),
+            "library_stage": str(library_stage),
+            "risk_integral": float(risk_integral) if risk_integral is not None else None,
+            "risk_max": float(risk_max) if risk_max is not None else None,
+            "risk_available": bool(risk_available),
+            "risk_oob_rate": float(risk_oob_rate) if risk_oob_rate is not None else None,
+            "nofly_margin_min": float(nofly_margin_min) if nofly_margin_min is not None else None,
+            "nofly_available": bool(nofly_available),
+            "terminal_err_m": float(getattr(info, "terminal_error_m", 0.0)),
+            "max_violation": float(getattr(info, "max_violation", 0.0)),
+            "solve_time_s": float(getattr(info, "solve_time", 0.0)),
+            "candidates_total": int(candidates_total),
+            "candidates_rejected_nofly": int(candidates_rejected_nofly),
+            "candidates_rejected_terminal": int(candidates_rejected_terminal),
+            "candidates_kept": int(candidates_kept),
+            "library_feature_weights_custom": bool(feature_weights_custom),
+            "library_feature_weights": dict(self._library_feature_weights) if feature_weights_custom else None,
+            "wind": {
+                "ned_to_mps": [float(wind.v_I[0]), float(wind.v_I[1]), float(wind.v_I[2])],
+                "speed_mps": float(np.linalg.norm(wind.v_I[:2])),
+                "src": wind_diag.get("source"),
+                "age_s": float(wind_diag.get("age_s", 0.0)),
+            },
+            "solver": {
+                "success": bool(getattr(info, "success", False)),
+                "status": int(getattr(info, "status", 0)),
+                "iterations": int(getattr(info, "iterations", 0)),
+                "cost": float(getattr(info, "cost", 0.0)),
+                "message": str(getattr(info, "message", "")),
+            },
+            "safety": safety_payload,
+        }
 
     def _compute_current_target_margin(self, state: State, wind: Wind, target_xy: np.ndarray) -> float:
         terrain = self.planner._load_terrain()
@@ -772,6 +985,15 @@ class PlannerNode(Node):
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.header.frame_id = "world"
 
+        yaw_air = None
+        try:
+            meta = trajectory.metadata or {}
+            yaw_air = meta.get("yaw_air_ref_rad")
+            if not isinstance(yaw_air, (list, tuple)) or len(yaw_air) != len(trajectory.waypoints):
+                yaw_air = None
+        except Exception:
+            yaw_air = None
+
         for wp in trajectory.waypoints:
             pose = PoseStamped()
             pose.header = msg.header
@@ -779,7 +1001,12 @@ class PlannerNode(Node):
             pose.pose.position.x = x
             pose.pose.position.y = y
             pose.pose.position.z = z
-            qw, qx, qy, qz = _quat_ned_to_enu(wp.state.q_IB)
+            if yaw_air is not None:
+                yaw_ref = float(yaw_air[len(msg.poses)])
+                q_ned = quat_from_euler(0.0, 0.0, yaw_ref)
+                qw, qx, qy, qz = _quat_ned_to_enu(q_ned)
+            else:
+                qw, qx, qy, qz = _quat_ned_to_enu(wp.state.q_IB)
             pose.pose.orientation.w = qw
             pose.pose.orientation.x = qx
             pose.pose.orientation.y = qy
@@ -964,46 +1191,17 @@ class PlannerNode(Node):
         self._publish_path(traj)
         self._force_replan = False
 
-        s = String()
-        safety_msg = ""
-        if selection is not None and selection.reason != "disabled":
-            meta = selection.metadata or {}
-            tgo = meta.get("touchdown_tgo_s")
-            v_air = meta.get("touchdown_v_air_mps")
-            sink = meta.get("touchdown_sink_mps")
-            v_g_along = meta.get("touchdown_v_g_along_max_mps")
-            aim_used = meta.get("aimpoint_used")
-            aim_n = meta.get("aimpoint_n")
-            aim_e = meta.get("aimpoint_e")
-            safety_msg = (
-                f" safety={selection.reason} reason={selection.reason} risk={selection.risk:.3g} "
-                f"dist={selection.distance_to_desired_m:.1f}m margin={selection.reach_margin_mps:.2f}mps"
-            )
-            if tgo is not None and np.isfinite(tgo):
-                safety_msg += f" tgo={float(tgo):.1f}s"
-            if v_air is not None and np.isfinite(v_air):
-                safety_msg += f" v_air={float(v_air):.2f}"
-            if sink is not None and np.isfinite(sink):
-                safety_msg += f" sink={float(sink):.2f}"
-            if v_g_along is not None and np.isfinite(v_g_along):
-                safety_msg += f" v_g_along_max={float(v_g_along):.2f}"
-            if aim_used is not None:
-                safety_msg += f" aim_used={int(bool(aim_used))}"
-            if aim_n is not None and aim_e is not None:
-                safety_msg += f" aim={float(aim_n):.1f},{float(aim_e):.1f}"
-            if policy_reason is not None:
-                safety_msg += f" policy={policy_reason.value}"
-        s.data = (
-            f"success={info.success} iters={info.iterations} "
-            f"time={info.solve_time:.3f}s cost={info.cost:.3f} "
-            f"max_violation={info.max_violation:.3g} terminal_err={info.terminal_error_m:.2f}m "
-            f"msg={info.message}"
-            f" wind={wind.v_I[0]:+.2f},{wind.v_I[1]:+.2f},{wind.v_I[2]:+.2f}"
-            f" wind_spd={wind_speed:.2f} V_air_max={float(v_air_max):.2f} ratio={wind_ratio:.2f}"
-            f" wind_src={wind_diag.get('source')}"
-            f" wind_age={float(wind_diag.get('age_s', 0.0)):.2f}s"
-            f"{safety_msg}"
+        status = self._build_planner_status(
+            traj=traj,
+            info=info,
+            wind=wind,
+            wind_ratio=wind_ratio,
+            wind_diag=wind_diag,
+            selection=selection,
+            policy_reason=policy_reason,
         )
+        s = String()
+        s.data = json.dumps(status, ensure_ascii=False)
         self.pub_status.publish(s)
 
 

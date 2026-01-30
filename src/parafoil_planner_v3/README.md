@@ -45,19 +45,22 @@
 - **目标点来源**：
   - `target.auto_mode=manual`：使用 `/target` 或 `target.position_ned`。
   - `target.auto_mode=current`：落点取当前位置。
-  - `target.auto_mode=reach_center`：落点取风漂移中心。
+  - `target.auto_mode=reach_center`：落点取风漂移中心（用 `safety.reachability.brake` 的极曲线估计 `tgo`，再做 `center = p + wind*tgo`）。
 - **安全落点选择（可选）**：
   - `LandingSiteSelector` 从可达域中采样候选点，融合风险栅格与禁飞区惩罚，得到最优落点。
   - `TargetUpdatePolicy` 负责滞后/锁定/紧急重选，避免频繁跳变。
+  - 若“期望目标在当前风下不可达”（判据：`v_g_along_max <= headwind.min_progress_mps`，默认 0），Selector 会把 `reason` 标成 `unreachable_wind`；`PlannerNode` 会 **强制更新目标**（绕过滞后/锁定）。
 - **规划流程（PlannerCore）**：
   1) 轨迹库匹配（KNN）→ 适配 → 约束检查 → 成本排序
   2) 可选 GPM 精修（偏差过大时）
   3) 失败时 GPM 在线求解
   4) 仍失败则生成直线路径并做风漂移修正
+  5) （可选）强风/顶风 **aimpoint**：当 `headwind.enable=true` 且触发条件满足时，Planner 会先算一个“上风偏置的规划目标点（aimpoint）”，并将 **规划目标点临时替换为 aimpoint**（轨迹终端点也会是 aimpoint），用于对冲风漂移/提高可达性；同时会把 touchdown 目标与 aimpoint 都可视化出来便于调参。
 - **输出**：
   - `/planned_trajectory` (`nav_msgs/Path`, ENU)
-  - `/planner_status` (JSON 字符串)
+  - `/planner_status`（`std_msgs/String`，JSON 诊断串，`schema_version=planner_status.v2`）
   - RViz 预览 Marker（目标点红色，安全落点绿色）
+    - 若启用 headwind aimpoint，会额外发布一个蓝色点（aimpoint）
 
 ### GuidanceNode 逻辑（`parafoil_planner_v3/nodes/guidance_node.py`）
 
@@ -66,7 +69,9 @@
   - APPROACH → FLARE：高度或距离触发
   - ABORT：低空且远离目标/滑翔比过大/阶段超时
 - **跟踪策略**：
-  - 有规划路径：用 L1 lookahead 跟踪（`track_point_control`）。
+  - 有规划路径：用 L1 lookahead 跟踪。
+    - `path_tracking.mode=legacy|strong_wind_l1|auto`：强风下可切换到“风感知 L1”（用对空航向反馈 + 可选 yaw 前馈），以支持 **backward-drift/强风漂移** 情况。
+    - `strong_wind_l1.use_yaw_feedforward=true` 时会读取 `/planned_trajectory` 中 `pose.orientation` 的 yaw（Planner 端已填充姿态）。
   - 无路径：直接跟踪目标点。
 - **控制输出**：
   - CRUISE：自动消高（直飞/盘旋/S-turn/跑道型）
@@ -79,11 +84,15 @@
 - **参数**：
   - `library_path`：轨迹库文件路径；为空则不加载。
 - **服务**：
-  - `/query_library`（`parafoil_msgs/QueryLibrary`）：输入 5D 特征 `[altitude_m, distance_m, bearing_rad, wind_speed_mps, wind_angle_rad]`，返回匹配索引、距离与 `trajectory_types`；`k<=0` 时默认取 5。
+  - `/query_library`（`parafoil_msgs/QueryLibrary`）：输入 **5D 原始字段** `[altitude_m, distance_m, bearing_rad, wind_speed_mps, relative_wind_angle_rad]`，返回匹配索引、距离与 `trajectory_types`；`k<=0` 时默认取 5。
+    - 注意 srv 字段名叫 `wind_angle_rad`，但含义是“相对风角”。
+    - 内部会扩展为 **8D 特征**：`[altitude, distance, bearing, wind_speed, relative_wind, wind_ratio, wind_along, wind_cross]`。
+    - 其中 `relative_wind = wrap_pi(wind_angle_abs - bearing)`；`wind_ratio = |wind| / V_air_max`（`V_air_max` 取 PolarTable(刹车=0)）。
+    - `wind_along = dot(wind_xy, d_hat)`，`wind_cross = dot(wind_xy, cross_hat)`（`d_hat` 为朝目标方向单位向量）。
   - `/reload_library`（`std_srvs/Trigger`）：按当前 `library_path` 重新加载。
-- **说明（业内常见做法）**：翼伞轨迹库检索一般采用“低维物理特征”索引（高度/距离/方位/风），以便在样本有限时保持可检索性与可解释性。该 5D 组合并非行业统一标准，但属于工程上常见的方案：用最小信息刻画**可达性**与**进场几何**，并与库生成阶段使用的特征保持一致。
+- **说明（业内常见做法）**：翼伞轨迹库检索一般采用“低维物理特征”索引（高度/距离/方位/风），以便在样本有限时保持可检索性与可解释性。这里使用 **8D**（alt/dist/bearing/wind_speed/rel_wind + wind_ratio/along/cross），在保持可检索性的同时显式区分强风可达性与侧风结构，并与库生成阶段使用的特征保持一致。
 - **启动逻辑**：`full_system.launch.py` / `planner.launch.py` / `e2e_verification.launch.py` 中通过 `start_library_server` 条件启动，默认 `true`，且与 `library_path` 复用同一路径。
-- **与 Planner 的关系**：Planner 在 `use_library=true` 时自行从 `library_path` 加载库；关闭服务器不会影响规划，仅影响 `/query_library` 服务是否可用。
+- **与 Planner 的关系**：PlannerNode 在 `use_library=true` 时会在本进程按 `library.coarse_path`/`library.fine_path`（若 `fine_path` 为空则回退到 `library_path`）加载库；关闭服务器不会影响规划，仅影响 `/query_library` 服务是否可用。
 
 ## 坐标系
 
@@ -143,7 +152,7 @@ wind:
 - 轨迹库在强风下更容易“选到勉强可行但误差大”的邻居，因此 PlannerCore 提供保护：
   - `library.skip_if_unreachable_wind=true`：当“沿目标方向的地速”过小/不可达时跳过轨迹库，直接走 GPM/回退链路。
   - `library.min_track_ground_speed_mps`：上述判定的最低地速阈值。
-  - 相关诊断可在 `/planner_status` 里看到：`wind_src` / `wind_age` / `ratio` / `solver_info.message`。
+  - 相关诊断可在 `/planner_status` JSON 里看到：`wind.src` / `wind.age_s` / `wind_ratio` / `solver.message` / `library_stage` / `reason`。
 
 ### 6) Launch 中与风相关的参数（仿真）
 
@@ -220,7 +229,7 @@ ros2 launch parafoil_planner_v3 e2e_verification.launch.py \
   wind_steady_n:=0.0 wind_steady_e:=10.0 wind_steady_d:=0.0 \
   target_delay_s:=0.1 target_enu_x:=220.0 target_enu_y:=0.0 target_enu_z:=0.0
 
-# Expect `msg=library:*` in /planner_status:
+# Expect `library_stage` / `library_hit` in /planner_status JSON:
 ros2 topic echo /planner_status --once --full-length
 
 # optional 6-DOF validation library (small grid, extreme conditions)
@@ -228,6 +237,24 @@ python3 $(ros2 pkg prefix parafoil_planner_v3)/share/parafoil_planner_v3/scripts
   --config $(ros2 pkg prefix parafoil_planner_v3)/share/parafoil_planner_v3/config/library_params_6dof_validation.yaml \
   --output /tmp/parafoil_library_6dof_validation.pkl
 ```
+
+库配置补充说明（容易踩坑的约定/字段）：
+
+- **coarse vs fine（简答）**：
+  - **coarse**：覆盖更广、分辨率更粗、生成更快，用于第一阶段快速“可达筛选”。
+  - **fine**：覆盖更精、质量更高，用于最终轨迹选择与末端误差/风险更优的匹配。
+- **在轨迹选择流程中的作用**：
+  - **coarse**：先做 KNN + 约束检查的“门控”；若 `require_coarse_match=true` 且 coarse 失败，会直接跳过 fine，进入 GPM/回退。
+  - **fine**：在 coarse 通过后做精匹配与终选；若 fine 失败且 `fallback_to_coarse=true`，回退使用 coarse 最佳候选。
+
+- `wind_directions`/`wind_direction_deg`：一律是 **wind-to**（风吹向哪里）的方位角（deg），在 NED 平面里定义：`0°=北(+N)，90°=东(+E)，180°=南，270°=西`。
+- `target_bearings`/`target_bearing_deg`：一律是 **从初始位置指向目标点**（state→target）的方位角（deg），同样按 NED 角度约定。
+- `library_params_strongwind_headwind_coarse.yaml`：强风 coarse 库（网格更小，默认 `generation.gpm.dynamics_mode=simplified`，用于两阶段匹配的 coarse gate）。
+- `library_params_strongwind_headwind.yaml`：强风 fine 库（网格更大，可选 `mixed` 掺少量 6DOF 用于质量抽检）。
+- `matching.feature_weights`：Planner 在加载库时会用该字段重建 KDTree 索引；可在 YAML 中写 `library.matching.feature_weights.<key>`，或直接传 JSON 字符串；`wind_angle` 可作为 `rel_wind` 的别名。
+  - 可用权重键：`altitude / distance / bearing / wind_speed / rel_wind / wind_ratio / wind_along / wind_cross`。
+  - 兼容别名：`wind_angle` 等价于 `rel_wind`（用于旧配置）。
+- 轨迹元信息（库生成后写入）：`yaw_air_ref_rad` 之外新增 `is_backward_flight`（backward_drift_fraction>阈值）与 `is_backward_progress`（沿目标方向平均地速为负）。更新字段需要**重新生成库**才会出现在 `.pkl` 里。
 
 为避免多进程 + BLAS 线程过度抢占导致变慢，建议在生成时限制数值库线程：
 
@@ -288,12 +315,29 @@ safety:
     grid_file: "config/demo_risk_grid.npz"
 ```
 
+在线规划动力学与积分器（影响在线 GPM 与轨迹可行性检查；与“离线库生成”的 `generation.gpm.dynamics_mode` 不同）：
+
+```yaml
+# dynamics_params.yaml
+dynamics_params_yaml: ""     # 可选：指向 parafoil_simulator_ros 的 params.yaml（同一 schema）
+integrator:
+  method: "rk4"              # euler|semi_implicit|rk4
+  dt_max: 0.01
+
+# planner_params*.yaml（或任意 param file 覆盖）
+planning:
+  dynamics_mode: "6dof"      # 6dof(更贴近仿真，慢) | simplified(更快更稳，适合在线 GPM)
+```
+
 ## 安全优先落点选择（Safety First）
 
 - **RiskGrid**：支持 `.npz/.yaml/.json` 风险栅格。
 - **Reachability**：基于刹车档位估计可达圈 + 风裕度。
 - **No-fly**：支持 Circle / Polygon / GeoJSON。
 - **TargetUpdatePolicy**：相位锁定 + 滞后 + 紧急重选。
+- **过程风险指标**：若启用风险栅格（`safety.risk.*`），Planner 会沿地面路径统计
+  `risk_integral / risk_mean / risk_max`（按路径长度积分）并写入轨迹 metadata。
+  需要时可在库匹配代价中加入惩罚：`library.cost_w_risk_integral` / `library.cost_w_risk_max`（默认 0，不改变行为，兼容旧字段 `cost_w_process_risk_*`）。
 
 ### RiskGrid 示例（`config/demo_risk_grid.npz`）
 
@@ -325,6 +369,8 @@ python3 /home/aims/parafoil_ws/src/parafoil_planner_v3/scripts/generate_shenzhen
   --output-nofly /home/aims/parafoil_ws/src/parafoil_planner_v3/config/shenzhen_like_no_fly_polygons.json
 ```
 
+默认会在起始点 `(0,0)` 周围保留一圈**无 no-fly** 的安全区域（`--start-clear-radius`，默认 `150m`），避免一开始就触发禁飞约束。
+
 生成更大覆盖（约 800m×800m，仍把 `(0,0)` 放中间）。**大范围会自动增加楼群/道路/电力走廊等元素**：
 
 ```bash
@@ -332,6 +378,15 @@ python3 /home/aims/parafoil_ws/src/parafoil_planner_v3/scripts/generate_shenzhen
   --output-npz /home/aims/parafoil_ws/src/parafoil_planner_v3/config/shenzhen_like_risk_grid_800x800.npz \
   --output-nofly /home/aims/parafoil_ws/src/parafoil_planner_v3/config/shenzhen_like_no_fly_polygons_800x800.json \
   --cells 400 --resolution 2.0 --origin-n -400 --origin-e -400
+```
+
+生成超大覆盖（约 3000m×3000m，仍把 `(0,0)` 放中间；会进一步增密元素）：
+
+```bash
+python3 /home/aims/parafoil_ws/src/parafoil_planner_v3/scripts/generate_shenzhen_like_scene.py \
+  --output-npz /home/aims/parafoil_ws/src/parafoil_planner_v3/config/shenzhen_like_risk_grid_3000x3000.npz \
+  --output-nofly /home/aims/parafoil_ws/src/parafoil_planner_v3/config/shenzhen_like_no_fly_polygons_3000x3000.json \
+  --cells 1500 --resolution 2.0 --origin-n -1500 --origin-e -1500
 ```
 
 运行（带 RViz + SafetyViz 可视化风险/禁飞）：
@@ -347,6 +402,15 @@ ros2 launch parafoil_planner_v3 safety_demo.launch.py \
   no_fly_polygons_file:=/home/aims/parafoil_ws/src/parafoil_planner_v3/config/shenzhen_like_no_fly_polygons_800x800.json
 ```
 
+运行 3000×3000 版本：
+
+```bash
+ros2 launch parafoil_planner_v3 safety_demo.launch.py \
+  planner_params:=/home/aims/parafoil_ws/src/parafoil_planner_v3/config/planner_params_safety_shenzhen_like_3000.yaml \
+  risk_grid_file:=/home/aims/parafoil_ws/src/parafoil_planner_v3/config/shenzhen_like_risk_grid_3000x3000.npz \
+  no_fly_polygons_file:=/home/aims/parafoil_ws/src/parafoil_planner_v3/config/shenzhen_like_no_fly_polygons_3000x3000.json
+```
+
 ### 一键安全 Demo
 
 ```bash
@@ -354,6 +418,19 @@ ros2 launch parafoil_planner_v3 safety_demo.launch.py
 ```
 
 该 launch 会额外启动 `safety_viz_node`，在 RViz 中可视化：风险热力图、可达域、禁飞区等。
+
+### 强风安全 Demo（Shenzhen-like）
+
+使用强风引导配置 + 深圳场景安全参数，验证顶风/逆风场景下的平稳落地与避障：
+
+```bash
+ros2 launch parafoil_planner_v3 e2e_verification.launch.py \
+  planner_params:=/home/aims/parafoil_ws/src/parafoil_planner_v3/config/planner_params_safety_shenzhen_like_3000.yaml \
+  guidance_params:=/home/aims/parafoil_ws/src/parafoil_planner_v3/config/guidance_params_strongwind.yaml \
+  use_library:=false start_library_server:=false \
+  wind_enable_steady:=true wind_steady_n:=0.0 wind_steady_e:=7.0 wind_steady_d:=0.0 \
+  initial_altitude:=80.0
+```
 
 ## ROS2 接口速查
 
@@ -368,8 +445,9 @@ ros2 launch parafoil_planner_v3 safety_demo.launch.py
 - `/planned_path` (nav_msgs/Path, v2 兼容)
 - `/control_command` (geometry_msgs/Vector3Stamped)
 - `/guidance_phase` (std_msgs/String)
-- `/planner_status` (std_msgs/String)
+- `/planner_status` (std_msgs/String, JSON)
 - `/trajectory_preview` (visualization_msgs/MarkerArray)
+- `/safety_viz` (visualization_msgs/MarkerArray, safety_viz_node 可视化)
 
 **服务**
 - `/replan` (std_srvs/Trigger)
@@ -408,12 +486,30 @@ ros2 launch parafoil_planner_v3 e2e_verification.launch.py \
   wind_enable_steady:=true wind_steady_n:=0.0 wind_steady_e:=4.0 wind_steady_d:=0.0 \
   target_enu_x:=100.0 target_enu_y:=0.0 target_enu_z:=0.0
 
-# 观察一次规划状态与轨迹（`/planner_status` 是一行字符串）
+# 观察一次规划状态与轨迹（`/planner_status` 为 JSON 字符串）
 ros2 topic echo --once /planner_status
 ros2 topic echo --once /planned_trajectory
 ```
 
 更多脚本见 `src/parafoil_planner_v3/scripts/`。
+
+### 任务日志（Mission Logger，可选）
+
+`mission_logger_node` 会把状态/控制/阶段/路径等记录到 JSON（默认 `/tmp/mission_logs`），便于离线复盘与统计。
+
+```bash
+# 运行 e2e_verification 并记录日志
+ros2 launch parafoil_planner_v3 e2e_verification.launch.py \
+  record_mission_log:=true mission_log_dir:=/tmp/mission_logs
+
+# 生成 E2E 指标报告（JSON + 可选 HTML）
+python3 $(ros2 pkg prefix parafoil_planner_v3)/share/parafoil_planner_v3/scripts/analyze_mission_log.py \
+  --log /tmp/mission_logs \
+  --risk-grid /path/to/risk_grid.npz \
+  --no-fly /path/to/no_fly_polygons.json \
+  --out /tmp/mission_metrics.json \
+  --html /tmp/mission_report.html
+```
 
 ## 目录速览
 
@@ -431,7 +527,7 @@ parafoil_planner_v3/
 - **规划结果为空或不稳定**：检查 `gpm_params.yaml` 约束是否过严，或风速是否大于空速。
 - **安全落点频繁跳变**：增大 `target.update_policy.*` 的滞后阈值。
 - **轨迹库加载失败**：确认 `library_path` 与库版本匹配，必要时重新生成。
-- **风估计导致落点明显偏移**：优先确认 `/wind_estimate` 的坐标系与约定是否正确（默认 NED + wind-to）。可查看 `/planner_status` 中的 `wind_src/wind_age/ratio`，必要时配置 `wind.input_frame`（enu/ned/auto）、`wind.convention`（to/from）以及 `wind.timeout_s`。
+- **风估计导致落点明显偏移**：优先确认 `/wind_estimate` 的坐标系与约定是否正确（默认 NED + wind-to）。可查看 `/planner_status` JSON 中的 `wind.src/wind.age_s/wind_ratio`，必要时配置 `wind.input_frame`（enu/ned/auto）、`wind.convention`（to/from）以及 `wind.timeout_s`。
 
 ## 相关阅读
 

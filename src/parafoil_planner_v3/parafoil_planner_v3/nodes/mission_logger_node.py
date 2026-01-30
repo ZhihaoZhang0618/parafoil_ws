@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Optional
+import json
 
 import numpy as np
 
@@ -31,6 +32,8 @@ class MissionLoggerNode(Node):
         self._odom: Optional[Odometry] = None
         self._control: Optional[Vector3Stamped] = None
         self._phase: Optional[str] = None
+        self._planner_status: dict | str | None = None
+        self._track_mode: Optional[str] = None
         self._target_ned = np.array([0.0, 0.0, 0.0], dtype=float)
 
         out_dir = str(self.get_parameter("output_dir").value)
@@ -42,6 +45,8 @@ class MissionLoggerNode(Node):
         self.create_subscription(Vector3Stamped, "/control_command", self._on_control, 10)
         self.create_subscription(Path, "/planned_trajectory", self._on_path, 10)
         self.create_subscription(String, "/guidance_phase", self._on_phase, 10)
+        self.create_subscription(String, "/planner_status", self._on_planner_status, 10)
+        self.create_subscription(String, "/path_tracking_mode", self._on_track_mode, 10)
         self.create_subscription(PoseStamped, str(self.get_parameter("target_topic").value), self._on_target, 10)
 
         rate = float(self.get_parameter("log_rate_hz").value)
@@ -58,6 +63,22 @@ class MissionLoggerNode(Node):
 
     def _on_phase(self, msg: String) -> None:
         self._phase = str(msg.data)
+
+    def _on_planner_status(self, msg: String) -> None:
+        text = str(msg.data)
+        payload: dict | str | None = None
+        if text.strip().startswith("{"):
+            try:
+                parsed = json.loads(text)
+                payload = parsed if isinstance(parsed, dict) else text
+            except json.JSONDecodeError:
+                payload = text
+        else:
+            payload = text
+        self._planner_status = payload
+
+    def _on_track_mode(self, msg: String) -> None:
+        self._track_mode = str(msg.data)
 
     def _on_target(self, msg: PoseStamped) -> None:
         p_enu = np.array([msg.pose.position.x, msg.pose.position.y, msg.pose.position.z], dtype=float)
@@ -103,6 +124,11 @@ class MissionLoggerNode(Node):
         if self._phase and self._phase != self._last_phase:
             self.logger.log_event(ts, "phase_transition", {"to": self._phase})
             self._last_phase = self._phase
+
+        if self._planner_status is not None:
+            self.logger.log_planner_status(ts, self._planner_status)
+        if self._track_mode is not None:
+            self.logger.log_tracking_mode(ts, self._track_mode)
 
         if bool(self.get_parameter("auto_stop_on_landing").value):
             altitude = float(-state["position"][2])

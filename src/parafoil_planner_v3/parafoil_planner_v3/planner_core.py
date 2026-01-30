@@ -17,6 +17,7 @@ from parafoil_planner_v3.environment import (
 )
 from parafoil_planner_v3.landing_site_selector import LandingSiteSelection, LandingSiteSelector
 from parafoil_planner_v3.dynamics.parafoil_6dof import SixDOFDynamics
+from parafoil_planner_v3.dynamics.simplified_model import yaw_only_quat_wxyz
 from parafoil_planner_v3.optimization import GPMCollocation, GPMSolver, SolverInfo
 from parafoil_planner_v3.optimization.solver_interface import SolverConfig
 from parafoil_planner_v3.trajectory_library.library_manager import LibraryTrajectory, TrajectoryLibrary
@@ -89,6 +90,13 @@ class PlannerConfig:
     library_cost_w_control: float = 0.05
     library_cost_w_time: float = 0.02
     library_cost_w_path_length: float = 0.0
+    # Risk-aware library scoring (new names; prefer these over *_process_risk_*)
+    library_cost_w_risk_integral: float = 0.0
+    library_cost_w_risk_max: float = 0.0
+    library_risk_sample_step_m: float = 5.0
+    library_nofly_sample_step_m: float = 2.0
+    library_cost_w_process_risk_integral: float = 0.0
+    library_cost_w_process_risk_max: float = 0.0
     # Library safety gates (0 disables a check)
     library_max_feature_distance: float = 0.0
     library_max_altitude_error_m: float = 0.0
@@ -103,7 +111,10 @@ class PlannerConfig:
     # Skip library matching when wind makes the target line fundamentally untrackable.
     # This is a "sanity gate" to avoid trusting KNN+adaptation in extreme wind.
     library_skip_if_unreachable_wind: bool = True
-    library_min_track_ground_speed_mps: float = 0.2
+    library_min_track_ground_speed_mps: float = 0.2  # legacy; kept for compatibility
+    # Reachability slack margin (m/s) used by the wind reachability sanity gate.
+    # Larger values make the gate less aggressive (skip fewer cases).
+    library_reachability_margin_mps: float = 0.2
 
     # Fallback trajectory generation
     fallback_dt: float = 1.0
@@ -138,6 +149,7 @@ class PlannerCore:
         self.landing_site_selector = landing_site_selector
         self.last_site_selection: LandingSiteSelection | None = None
         self.last_aimpoint_target: Target | None = None
+        self.last_plan_meta: dict = {}
         self._terrain_cache: TerrainModel | None = None
         self._terrain_cache_key: str | None = None
 
@@ -215,6 +227,196 @@ class PlannerCore:
             "cross_ok": True,
             "v_track_max_mps": float(v_track),
         }
+
+    def _wind_reachability_diag(self, state: State, target: Target, wind: Wind) -> dict:
+        """
+        Best-effort diagnostic for point reachability under constant wind, using the polar (V,sink) curve.
+
+        This is intentionally *not* a "trackability along the target line" check:
+        in strong wind you may drift and still be able to reach a point within the reachable set.
+        """
+        rel = target.position_xy - state.position_xy
+        dist = float(np.linalg.norm(rel))
+        wind_xy = np.asarray(wind.v_I[:2], dtype=float)
+        wind_speed = float(np.linalg.norm(wind_xy))
+        alt_agl = float(max(state.altitude - target.altitude, 0.0))
+        margin = float(max(self.config.library_reachability_margin_mps, 0.0))
+
+        if dist < 1e-6:
+            return {
+                "reachable": True,
+                "distance_m": 0.0,
+                "altitude_agl_m": float(alt_agl),
+                "wind_speed_mps": float(wind_speed),
+                "best_brake": float("nan"),
+                "best_slack_mps": float("inf"),
+                "best_req_air_mps": 0.0,
+            }
+
+        if alt_agl <= 1e-6:
+            return {
+                "reachable": False,
+                "reason": "no_altitude",
+                "distance_m": float(dist),
+                "altitude_agl_m": float(alt_agl),
+                "wind_speed_mps": float(wind_speed),
+                "best_brake": float("nan"),
+                "best_slack_mps": float("-inf"),
+                "best_req_air_mps": float("inf"),
+            }
+
+        best_slack = float("-inf")
+        best_req = float("inf")
+        best_b = float("nan")
+        for b in np.asarray(self._polar.brake, dtype=float).reshape(-1):
+            Vb, sinkb = self._polar.interpolate(float(b))
+            if float(sinkb) <= 1e-6:
+                continue
+            tgo = float(alt_agl / float(sinkb))
+            if tgo <= 1e-6:
+                continue
+            v_req_ground = rel / tgo
+            v_req_air = v_req_ground - wind_xy
+            req = float(np.linalg.norm(v_req_air))
+            slack = float(Vb + margin - req)
+            if slack > best_slack:
+                best_slack = slack
+                best_req = req
+                best_b = float(b)
+
+        reachable = bool(best_slack > 0.0)
+        diag = {
+            "reachable": reachable,
+            "distance_m": float(dist),
+            "altitude_agl_m": float(alt_agl),
+            "wind_speed_mps": float(wind_speed),
+            "best_brake": float(best_b),
+            "best_slack_mps": float(best_slack),
+            "best_req_air_mps": float(best_req),
+            "margin_mps": float(margin),
+        }
+        if not reachable:
+            diag["reason"] = "unreachable_wind"
+        return diag
+
+    def _attach_yaw_air_ref(self, traj: Trajectory, wind: Wind, min_air_speed: float = 0.3) -> Trajectory:
+        """
+        Attach per-waypoint air-heading yaw reference into traj.metadata.
+
+        This is used by the guidance strong-wind L1 tracker as yaw feedforward.
+        """
+        if not traj.waypoints:
+            return traj
+        wind_xy = np.asarray(wind.v_I[:2], dtype=float)
+        wind_speed = float(np.linalg.norm(wind_xy))
+        yaws: list[float] = []
+        for wp in traj.waypoints:
+            v_air = np.asarray(wp.state.v_I[:2], dtype=float) - wind_xy
+            Va = float(np.linalg.norm(v_air))
+            if Va > float(min_air_speed):
+                yaw = float(np.arctan2(v_air[1], v_air[0]))
+            elif wind_speed > 0.2:
+                # Near-stall airspeed: default to facing upwind.
+                yaw = float(np.arctan2(-wind_xy[1], -wind_xy[0]))
+            else:
+                v_g = np.asarray(wp.state.v_I[:2], dtype=float)
+                Vg = float(np.linalg.norm(v_g))
+                if Vg > float(min_air_speed):
+                    yaw = float(np.arctan2(v_g[1], v_g[0]))
+                else:
+                    _, _, yaw_q = quat_to_rpy(wp.state.q_IB)
+                    yaw = float(yaw_q)
+            yaws.append(float(wrap_pi(yaw)))
+
+        meta = dict(traj.metadata or {})
+        meta["yaw_air_ref_rad"] = yaws
+        meta["yaw_air_ref_source"] = "computed_from_v_air"
+        meta["yaw_air_ref_min_air_speed_mps"] = float(min_air_speed)
+        meta["wind_ned_to_mps"] = np.asarray(wind.v_I, dtype=float).reshape(3).tolist()
+        traj.metadata = meta
+        return self._attach_process_risk_metrics(traj)
+
+    @staticmethod
+    def _risk_point_oob(north_m: float, east_m: float, risk_map: "RiskMapAggregator") -> bool:
+        for layer in getattr(risk_map, "layers", []) or []:
+            grid = layer.grid
+            res = float(grid.resolution_m)
+            if res <= 1e-9:
+                continue
+            u = (float(north_m) - float(grid.origin_n)) / res
+            v = (float(east_m) - float(grid.origin_e)) / res
+            if u < 0.0 or v < 0.0 or u > (grid.risk_map.shape[0] - 1) or v > (grid.risk_map.shape[1] - 1):
+                return True
+        return False
+
+    def _compute_process_risk_metrics(self, traj: Trajectory) -> dict:
+        risk_map = self.landing_site_selector.risk_map if self.landing_site_selector is not None else None
+        if risk_map is None or not getattr(risk_map, "layers", None) or not traj.waypoints:
+            return {}
+
+        wps = traj.waypoints
+        step = float(max(self.config.library_risk_sample_step_m, 1e-3))
+        integral = 0.0
+        max_risk = float("-inf")
+        total_len = 0.0
+        oob_samples = 0
+        n_samples = 0
+
+        p_prev = np.asarray(wps[0].state.position_xy, dtype=float)
+        r_prev = float(risk_map.risk(float(p_prev[0]), float(p_prev[1]))[0])
+        max_risk = max(max_risk, r_prev)
+        if self._risk_point_oob(float(p_prev[0]), float(p_prev[1]), risk_map):
+            oob_samples += 1
+        n_samples += 1
+
+        for i in range(1, len(wps)):
+            p_cur = np.asarray(wps[i].state.position_xy, dtype=float)
+            seg = p_cur - p_prev
+            seg_len = float(np.linalg.norm(seg))
+            if seg_len <= 1e-9:
+                continue
+            n_seg = max(int(np.ceil(seg_len / step)), 1)
+            ds = seg_len / n_seg
+            for j in range(1, n_seg + 1):
+                a = float(j) / float(n_seg)
+                p = p_prev + seg * a
+                r_cur = float(risk_map.risk(float(p[0]), float(p[1]))[0])
+                max_risk = max(max_risk, r_cur)
+                if self._risk_point_oob(float(p[0]), float(p[1]), risk_map):
+                    oob_samples += 1
+                n_samples += 1
+                integral += 0.5 * (r_prev + r_cur) * ds
+                total_len += ds
+                r_prev = r_cur
+            p_prev = p_cur
+
+        if max_risk == float("-inf"):
+            max_risk = 0.0
+        mean = float(integral / total_len) if total_len > 1e-9 else 0.0
+        oob_rate = float(oob_samples / max(n_samples, 1))
+        return {
+            "risk_integral": float(integral),
+            "risk_mean": float(mean),
+            "risk_max": float(max_risk),
+            "risk_oob_rate": float(oob_rate),
+            "risk_sample_step_m": float(step),
+            # Backward-compatible aliases
+            "process_risk_integral": float(integral),
+            "process_risk_mean": float(mean),
+            "process_risk_max": float(max_risk),
+        }
+
+    def _attach_process_risk_metrics(self, traj: Trajectory) -> Trajectory:
+        if not traj.waypoints:
+            return traj
+        meta = dict(traj.metadata or {})
+        if "risk_integral" in meta or "risk_max" in meta or "process_risk_integral" in meta or "process_risk_max" in meta:
+            return traj
+        metrics = self._compute_process_risk_metrics(traj)
+        if metrics:
+            meta.update(metrics)
+            traj.metadata = meta
+        return traj
 
     def _load_terrain(self) -> TerrainModel | None:
         terrain_type = str(self.config.terrain_type).strip().lower()
@@ -314,6 +516,44 @@ class PlannerCore:
         for zone in no_fly_polygons:
             min_dist = min(min_dist, float(zone.signed_distance_m(north_m, east_m)))
         return float(min_dist)
+
+    def _min_signed_distance_on_path(
+        self,
+        traj: Trajectory,
+        no_fly_circles: list[NoFlyCircle],
+        no_fly_polygons: list[NoFlyPolygon],
+        sample_step_m: float,
+    ) -> tuple[float, bool]:
+        if not traj.waypoints:
+            return float("inf"), False
+        if not no_fly_circles and not no_fly_polygons:
+            return float("inf"), False
+
+        step = float(max(sample_step_m, 1e-3))
+        pts = [np.asarray(wp.state.position_xy, dtype=float) for wp in traj.waypoints]
+        min_dist = float("inf")
+
+        # Always check each waypoint
+        for p in pts:
+            d = self._min_signed_distance_to_nofly(float(p[0]), float(p[1]), no_fly_circles, no_fly_polygons)
+            min_dist = min(min_dist, d)
+
+        # Interpolate along segments when spacing is large
+        for i in range(1, len(pts)):
+            p0 = pts[i - 1]
+            p1 = pts[i]
+            seg = p1 - p0
+            seg_len = float(np.linalg.norm(seg))
+            if seg_len <= step:
+                continue
+            n = max(int(np.ceil(seg_len / step)), 1)
+            for j in range(1, n):
+                a = float(j) / float(n)
+                p = p0 + seg * a
+                d = self._min_signed_distance_to_nofly(float(p[0]), float(p[1]), no_fly_circles, no_fly_polygons)
+                min_dist = min(min_dist, d)
+
+        return float(min_dist), True
 
     def _nofly_buffer_m(self) -> float:
         if self.landing_site_selector is None:
@@ -564,7 +804,14 @@ class PlannerCore:
 
         return True, "ok"
 
-    def _evaluate_library_cost(self, traj: Trajectory, target: Target, wind: Wind) -> float:
+    def _evaluate_library_cost(
+        self,
+        traj: Trajectory,
+        target: Target,
+        wind: Wind,
+        *,
+        risk_metrics: Optional[dict] = None,
+    ) -> float:
         if not traj.waypoints:
             return float("inf")
         final = traj.waypoints[-1].state
@@ -581,13 +828,26 @@ class PlannerCore:
             length += float(np.linalg.norm(pts[i] - pts[i - 1]))
         duration = float(traj.waypoints[-1].t - traj.waypoints[0].t)
 
-        return float(
+        cost = float(
             self.config.library_cost_w_terminal_pos * terminal_err
             + self.config.library_cost_w_heading * heading_err
             + self.config.library_cost_w_control * effort
             + self.config.library_cost_w_time * duration
             + self.config.library_cost_w_path_length * length
         )
+        risk_metrics = risk_metrics or {}
+        w_int = float(self.config.library_cost_w_risk_integral)
+        w_max = float(self.config.library_cost_w_risk_max)
+        if w_int <= 0.0 and w_max <= 0.0:
+            w_int = float(self.config.library_cost_w_process_risk_integral)
+            w_max = float(self.config.library_cost_w_process_risk_max)
+        if w_int > 0.0 or w_max > 0.0:
+            if not risk_metrics:
+                risk_metrics = self._compute_process_risk_metrics(traj)
+            if risk_metrics:
+                cost += w_int * float(risk_metrics.get("risk_integral", risk_metrics.get("process_risk_integral", 0.0)))
+                cost += w_max * float(risk_metrics.get("risk_max", risk_metrics.get("process_risk_max", 0.0)))
+        return float(cost)
 
     def _library_match_ok(
         self,
@@ -668,6 +928,13 @@ class PlannerCore:
         best_reason = "no_candidate"
         best_dist = None
         best_term_err = float("inf")
+        best_nofly_margin = float("inf")
+        best_nofly_available = False
+
+        candidates_total = int(len(idx_arr))
+        candidates_rejected_nofly = 0
+        candidates_rejected_terminal = 0
+        candidates_kept = 0
 
         for i, cand_idx in enumerate(idx_arr.tolist()):
             lib = library[int(cand_idx)]
@@ -675,20 +942,44 @@ class PlannerCore:
             knn_dist = float(dist_arr[i]) if i < len(dist_arr) else None
             match_ok, match_reason = self._library_match_ok(lib, features, knn_dist)
             scale_ok, scale_reason = self._library_scale_ok(adapted)
+            nofly_margin_min = float("inf")
+            nofly_available = False
+            nofly_violation = False
             if not match_ok:
                 feasible, reason = False, f"match:{match_reason}"
             elif not scale_ok:
                 feasible, reason = False, f"scale:{scale_reason}"
             else:
-                feasible, reason = self._check_trajectory_feasible(
+                nofly_margin_min, nofly_available = self._min_signed_distance_on_path(
                     adapted,
-                    planning_target,
-                    wind,
-                    terrain,
                     no_fly,
                     no_fly_polygons,
+                    float(self.config.library_nofly_sample_step_m),
                 )
-            cost = self._evaluate_library_cost(adapted, planning_target, wind)
+                if nofly_available and float(nofly_margin_min) < 0.0:
+                    feasible, reason = False, "nofly_violation"
+                    nofly_violation = True
+                else:
+                    feasible, reason = self._check_trajectory_feasible(
+                        adapted,
+                        planning_target,
+                        wind,
+                        terrain,
+                        no_fly,
+                        no_fly_polygons,
+                    )
+            if nofly_violation:
+                candidates_rejected_nofly += 1
+            elif not feasible and (str(reason).startswith("terminal_error") or str(reason) == "terminal_heading"):
+                candidates_rejected_terminal += 1
+
+            if feasible:
+                candidates_kept += 1
+                risk_metrics = self._compute_process_risk_metrics(adapted)
+                cost = self._evaluate_library_cost(adapted, planning_target, wind, risk_metrics=risk_metrics)
+            else:
+                risk_metrics = {}
+                cost = float("inf")
             term_err = float(np.linalg.norm(adapted.waypoints[-1].state.position_xy - planning_target.position_xy)) if adapted.waypoints else float("inf")
 
             meta = {
@@ -700,7 +991,12 @@ class PlannerCore:
                 "library_feasible": bool(feasible),
                 "library_feasible_reason": str(reason),
                 "library_cost": float(cost),
+                "nofly_margin_min": float(nofly_margin_min),
+                "nofly_available": bool(nofly_available),
+                "nofly_violation": bool(nofly_violation),
             }
+            if risk_metrics:
+                meta.update(risk_metrics)
             if adapted.metadata:
                 adapted.metadata.update(meta)
             else:
@@ -713,6 +1009,8 @@ class PlannerCore:
                 best_reason = reason
                 best_dist = float(dist_arr[i]) if i < len(dist_arr) else None
                 best_term_err = float(term_err)
+                best_nofly_margin = float(nofly_margin_min)
+                best_nofly_available = bool(nofly_available)
 
         return best_traj, {
             "stage": stage,
@@ -721,6 +1019,12 @@ class PlannerCore:
             "best_cost": best_cost,
             "best_reason": best_reason,
             "best_term_err": best_term_err,
+            "nofly_margin_min_best": float(best_nofly_margin),
+            "nofly_available": bool(best_nofly_available),
+            "candidates_total": int(candidates_total),
+            "candidates_rejected_nofly": int(candidates_rejected_nofly),
+            "candidates_rejected_terminal": int(candidates_rejected_terminal),
+            "candidates_kept": int(candidates_kept),
         }
 
     def _solve_gpm(self, state: State, target: Target, wind: Wind) -> Tuple[Trajectory, SolverInfo]:
@@ -749,8 +1053,12 @@ class PlannerCore:
             pass
 
         warm = self.solver.last_solution_z if self.config.enable_warm_start else None
+        if warm is None:
+            # Wind-aware warm start improves convergence in strong wind and reduces solver timeouts.
+            warm = self._warm_start_linear_wind_aware(state, target, wind, tf_guess)
         terrain = self._load_terrain()
-        no_fly, no_fly_polygons = self._build_no_fly()
+        no_fly, no_fly_polygons_full = self._build_no_fly()
+        no_fly_polygons = self._prefilter_no_fly_polygons_for_solve(state, target, wind, no_fly_polygons_full)
         terminal_heading_hat_xy = self._terminal_heading_hat(wind)
 
         traj, info = self.solver.solve(
@@ -764,7 +1072,143 @@ class PlannerCore:
             no_fly_polygons=no_fly_polygons,
             terminal_heading_hat_xy=terminal_heading_hat_xy,
         )
+        # If we prefiltered no-fly polygons for performance, validate against the full set once.
+        # This keeps correctness (hard safety constraint) while keeping the inner solve loop cheap.
+        if no_fly_polygons is not no_fly_polygons_full and info.success:
+            for wp in traj.waypoints:
+                st = wp.state
+                for zone in no_fly_polygons_full:
+                    if zone.signed_distance_m(float(st.p_I[0]), float(st.p_I[1])) < 0.0:
+                        info = SolverInfo(
+                            success=False,
+                            status=-1,
+                            message="nofly_violation_after_prefilter",
+                            iterations=int(info.iterations),
+                            cost=float(info.cost),
+                            solve_time=float(info.solve_time),
+                            max_violation=float("inf"),
+                            terminal_error_m=float(info.terminal_error_m),
+                        )
+                        return traj, info
         return traj, info
+
+    def _warm_start_linear_wind_aware(self, state: State, target: Target, wind: Wind, tf_guess: float) -> np.ndarray:
+        """
+        Construct a wind-aware warm start decision vector for GPMSolver.
+
+        This is intentionally lightweight: it is *not* dynamics-feasible, but it provides a much
+        better starting point than the default "constant v/q" guess under strong wind.
+        """
+        x0 = state.to_vector()
+        p0 = np.asarray(x0[0:3], dtype=float).reshape(3)
+        v0 = np.asarray(x0[3:6], dtype=float).reshape(3)
+        q0 = np.asarray(x0[6:10], dtype=float).reshape(4)
+        w0 = np.asarray(x0[10:13], dtype=float).reshape(3)
+
+        tf = float(np.clip(float(tf_guess), float(self.config.tf_min), float(self.config.tf_max)))
+        N = int(self.gpm.N)
+        X = np.zeros((N, 13), dtype=float)
+        U = np.full((N, 2), float(np.clip(self.config.fallback_brake, 0.0, 1.0)), dtype=float)
+
+        pT = np.asarray(target.p_I, dtype=float).reshape(3)
+        v_req = (pT - p0) / max(tf, 1e-6)
+        wind_xy = np.asarray(wind.v_I[:2], dtype=float).reshape(2)
+        wind_speed = float(np.linalg.norm(wind_xy))
+
+        for k in range(N):
+            a = 0.0 if N <= 1 else float(k / (N - 1))
+            # Linear position interpolation
+            X[k, 0:3] = (1.0 - a) * p0 + a * pT
+            # Blend velocities from current v0 -> v_req (helps boundary conditions)
+            X[k, 3:6] = (1.0 - a) * v0 + a * v_req
+
+            # Yaw guess points along v_air (or upwind if v_air is tiny).
+            v_air = X[k, 3:5] - wind_xy
+            Va = float(np.linalg.norm(v_air))
+            if Va > 0.3:
+                yaw = float(np.arctan2(v_air[1], v_air[0]))
+            elif wind_speed > 0.2:
+                yaw = float(np.arctan2(-wind_xy[1], -wind_xy[0]))
+            else:
+                yaw = 0.0
+            X[k, 6:10] = yaw_only_quat_wxyz(yaw)
+            X[k, 10:13] = w0
+
+        # Exact initial state.
+        X[0, :] = x0
+        X[0, 6:10] = q0
+
+        return self.solver._pack(X, U, tf)
+
+    def _prefilter_no_fly_polygons_for_solve(
+        self,
+        state: State,
+        target: Target,
+        wind: Wind,
+        no_fly_polygons: list[NoFlyPolygon],
+        *,
+        margin_m: float = 50.0,
+        min_polygons_for_prefilter: int = 64,
+    ) -> list[NoFlyPolygon]:
+        """
+        Reduce the number of no-fly polygon constraints inside the NLP for performance.
+
+        The GPM solver enforces no-fly polygons as inequality constraints at every collocation node.
+        In dense urban scenarios (hundreds of rectangles), evaluating all polygons can dominate the
+        solve time and trigger timeouts, causing unsafe fallback behavior.
+
+        Strategy:
+          - Build a conservative bounding box around the estimated reachable set for the current
+            altitude/time-to-go under this wind.
+          - Keep only polygons whose AABB intersects that box.
+          - After solving, validate the trajectory against the full set once.
+        """
+        if len(no_fly_polygons) < int(min_polygons_for_prefilter):
+            return no_fly_polygons
+
+        wind_xy = np.asarray(wind.v_I[:2], dtype=float)
+        wind_speed = float(np.linalg.norm(wind_xy))
+        V_air_max, _ = self._polar.interpolate(0.0)
+        V_air_max = float(max(float(V_air_max), 0.1))
+
+        # Time-to-go estimate based on altitude drop and a nominal sink rate.
+        alt_drop = float(max(state.altitude - target.altitude, 0.0))
+        try:
+            _V_nom, sink_nom = PolarTable().interpolate(float(self.config.fallback_brake))
+            sink_nom = float(max(float(sink_nom), 0.2))
+        except Exception:  # pragma: no cover - defensive
+            sink_nom = 1.0
+        tgo = float(alt_drop / sink_nom) if alt_drop > 1e-6 else 0.0
+
+        # Reachable set (conservative): circle centered at drift = wind*tgo with radius = V_air_max*tgo.
+        center = state.position_xy + wind_xy * float(tgo)
+        radius = float(V_air_max * float(tgo))
+
+        # Build AABB covering start, target, and reachable-set AABB.
+        n_vals = [float(state.position_xy[0]), float(target.position_xy[0]), float(center[0] - radius), float(center[0] + radius)]
+        e_vals = [float(state.position_xy[1]), float(target.position_xy[1]), float(center[1] - radius), float(center[1] + radius)]
+        # Slightly inflate margin with wind speed to avoid false exclusions in strong wind.
+        margin = float(max(margin_m, 0.1 * wind_speed * max(tgo, 0.0)))
+        nmin = float(min(n_vals) - margin)
+        nmax = float(max(n_vals) + margin)
+        emin = float(min(e_vals) - margin)
+        emax = float(max(e_vals) + margin)
+
+        def _intersects(zone: NoFlyPolygon) -> bool:
+            verts = np.asarray(zone.vertices, dtype=float)
+            znmin = float(np.min(verts[:, 0]) - float(zone.clearance_m))
+            znmax = float(np.max(verts[:, 0]) + float(zone.clearance_m))
+            zemin = float(np.min(verts[:, 1]) - float(zone.clearance_m))
+            zemax = float(np.max(verts[:, 1]) + float(zone.clearance_m))
+            if znmax < nmin or znmin > nmax:
+                return False
+            if zemax < emin or zemin > emax:
+                return False
+            return True
+
+        filtered = [z for z in no_fly_polygons if _intersects(z)]
+        # Never drop *all* polygons if input is non-empty.
+        return filtered if filtered else no_fly_polygons
 
     def _fallback_direct(self, state: State, target: Target, wind: Wind | None = None) -> Trajectory:
         # Straight-line interpolation in NED, keeping attitude/omega constant.
@@ -819,6 +1263,14 @@ class PlannerCore:
         planning_target = target
         self.last_site_selection = None
         self.last_aimpoint_target = None
+        self.last_plan_meta = {
+            "plan_source": "none",
+            "library_hit": False,
+            "library_stage": "none",
+            "library_stats": {},
+            "library_attempted": False,
+            "skip_library_reason": None,
+        }
 
         terrain = self._load_terrain()
         no_fly, no_fly_polygons = self._build_no_fly()
@@ -862,30 +1314,32 @@ class PlannerCore:
         # 1) Try library match (optional)
         skip_library_reason: str | None = None
         track_diag = self._wind_trackability_diag(state, planning_target, wind)
-        if bool(self.config.library_skip_if_unreachable_wind):
-            if not bool(track_diag.get("cross_ok", True)):
-                skip_library_reason = "wind_crosswind_exceeds_V_air_max"
-            else:
-                v_track_max = float(track_diag.get("v_track_max_mps", 0.0))
-                if v_track_max <= float(self.config.library_min_track_ground_speed_mps):
-                    skip_library_reason = "wind_no_progress_to_target"
+        reach_diag = self._wind_reachability_diag(state, planning_target, wind)
+        if bool(self.config.library_skip_if_unreachable_wind) and not bool(reach_diag.get("reachable", True)):
+            skip_library_reason = str(reach_diag.get("reason", "unreachable_wind"))
+        self.last_plan_meta["skip_library_reason"] = skip_library_reason
 
         skip_suffix = ""
         if skip_library_reason is not None:
             skip_suffix = (
                 f" skip_library={skip_library_reason}"
-                f" V_air_max={float(track_diag.get('V_air_max_mps', float('nan'))):.2f}"
                 f" wind={float(track_diag.get('wind_speed_mps', float('nan'))):.2f}"
+                f" V_air_max={float(track_diag.get('V_air_max_mps', float('nan'))):.2f}"
                 f" head={float(track_diag.get('headwind_mps', float('nan'))):.2f}"
                 f" cross={float(track_diag.get('crosswind_mps', float('nan'))):.2f}"
-                f" v_track_max={float(track_diag.get('v_track_max_mps', float('nan'))):.2f}"
+                f" reachable={bool(reach_diag.get('reachable', False))}"
+                f" slack={float(reach_diag.get('best_slack_mps', float('nan'))):.2f}"
+                f" req_air={float(reach_diag.get('best_req_air_mps', float('nan'))):.2f}"
+                f" b={float(reach_diag.get('best_brake', float('nan'))):.2f}"
             )
 
         if self.config.use_library and skip_library_reason is None and (
             (self.library_fine is not None and len(self.library_fine) > 0)
             or (self.library_coarse is not None and len(self.library_coarse) > 0)
         ):
-            feats = compute_scenario_features(state, planning_target, wind)
+            self.last_plan_meta["library_attempted"] = True
+            v_air_max, _ = self._polar.interpolate(0.0)
+            feats = compute_scenario_features(state, planning_target, wind, v_air_max_mps=float(v_air_max))
             coarse_best = None
             coarse_meta = {}
             coarse_ok = False
@@ -905,7 +1359,7 @@ class PlannerCore:
             require_coarse = bool(self.config.library_require_coarse_match) and self.library_coarse is not None
             if require_coarse and not coarse_ok:
                 # Coarse gate failed; skip fine stage and fall back to GPM.
-                pass
+                self.last_plan_meta["library_stats"] = coarse_meta
             else:
                 fine_best = None
                 fine_meta = {}
@@ -933,6 +1387,14 @@ class PlannerCore:
                     best_cost = best_meta.get("best_cost", float("inf"))
                     best_reason = best_meta.get("best_reason", "ok")
                     best_term_err = best_meta.get("best_term_err", float("inf"))
+                    self.last_plan_meta.update(
+                        {
+                            "plan_source": "library",
+                            "library_hit": True,
+                            "library_stage": str(stage),
+                            "library_stats": dict(best_meta),
+                        }
+                    )
 
                     # Optionally fine-tune if mismatch is large.
                     if self.config.enable_gpm_fine_tuning and best_term_err > float(self.config.fine_tuning_trigger_m):
@@ -940,6 +1402,7 @@ class PlannerCore:
                             traj, info = self._solve_gpm(state, planning_target, wind)
                             gpm_attempted = True
                             if info.success and info.max_violation <= float(self.config.max_constraint_violation_for_accept):
+                                self.last_plan_meta.update({"plan_source": "gpm", "library_hit": False, "library_stage": "gpm"})
                                 if skip_library_reason is not None:
                                     info = SolverInfo(
                                         success=info.success,
@@ -951,7 +1414,7 @@ class PlannerCore:
                                         max_violation=info.max_violation,
                                         terminal_error_m=info.terminal_error_m,
                                     )
-                                return traj, info
+                                return self._attach_yaw_air_ref(traj, wind), info
                         except Exception as e:  # pragma: no cover
                             info = SolverInfo(
                                 success=False,
@@ -974,7 +1437,10 @@ class PlannerCore:
                         max_violation=0.0,
                         terminal_error_m=float(best_term_err),
                     )
-                    return best_traj, info
+                    return self._attach_yaw_air_ref(best_traj, wind), info
+
+                # Library miss
+                self.last_plan_meta["library_stats"] = dict(best_meta)
 
             # No feasible library candidate → try GPM if enabled.
             if self.config.enable_gpm_fine_tuning:
@@ -982,7 +1448,8 @@ class PlannerCore:
                     traj, info = self._solve_gpm(state, planning_target, wind)
                     gpm_attempted = True
                     if info.success and info.max_violation <= float(self.config.max_constraint_violation_for_accept):
-                        return traj, info
+                        self.last_plan_meta["plan_source"] = "gpm"
+                        return self._attach_yaw_air_ref(traj, wind), info
                 except Exception as e:  # pragma: no cover
                     info = SolverInfo(
                         success=False,
@@ -1000,6 +1467,7 @@ class PlannerCore:
             try:
                 traj, info = self._solve_gpm(state, planning_target, wind)
                 if info.success and info.max_violation <= float(self.config.max_constraint_violation_for_accept):
+                    self.last_plan_meta["plan_source"] = "gpm"
                     if skip_library_reason is not None:
                         info = SolverInfo(
                             success=info.success,
@@ -1011,7 +1479,7 @@ class PlannerCore:
                             max_violation=info.max_violation,
                             terminal_error_m=info.terminal_error_m,
                         )
-                    return traj, info
+                    return self._attach_yaw_air_ref(traj, wind), info
             except Exception as e:  # pragma: no cover
                 info = SolverInfo(
                     success=False,
@@ -1034,9 +1502,11 @@ class PlannerCore:
                         max_violation=info.max_violation,
                         terminal_error_m=info.terminal_error_m,
                     )
-                return self._fallback_direct(state, planning_target, wind), info
+                self.last_plan_meta["plan_source"] = "fallback"
+                return self._attach_yaw_air_ref(self._fallback_direct(state, planning_target, wind), wind), info
 
         # 3) Fallback
+        self.last_plan_meta["plan_source"] = "fallback"
         if skip_library_reason is not None:
             info = SolverInfo(
                 success=info.success,
@@ -1048,4 +1518,4 @@ class PlannerCore:
                 max_violation=info.max_violation,
                 terminal_error_m=info.terminal_error_m,
             )
-        return self._fallback_direct(state, planning_target, wind), info
+        return self._attach_yaw_air_ref(self._fallback_direct(state, planning_target, wind), wind), info
